@@ -13,8 +13,8 @@ GN_ARGS:append = " fatal_linker_warnings=false"
 # Switch to ANGLE, since the newer ozone requires passthrough command decoder.
 # See:
 # https://issues.chromium.org/issues/40135856
-CHROMIUM_EXTRA_ARGS:remove = "--use-gl=egl"
-CHROMIUM_EXTRA_ARGS:append = " --use-gl=angle --use-angle=gles-egl --use-cmd-decoder=passthrough"
+#CHROMIUM_EXTRA_ARGS:remove = "--use-gl=egl"
+#CHROMIUM_EXTRA_ARGS:append = " --use-gl=angle --use-angle=gles-egl --use-cmd-decoder=passthrough"
 
 CHROMIUM_EXTRA_ARGS:append = " --no-sandbox --gpu-sandbox-start-early --ignore-gpu-blacklist --ignore-gpu-blocklist --enable-accelerated-video-decode"
 
