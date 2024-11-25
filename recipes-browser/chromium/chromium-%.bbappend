@@ -16,13 +16,9 @@ GN_ARGS:append = " fatal_linker_warnings=false"
 #CHROMIUM_EXTRA_ARGS:remove = "--use-gl=egl"
 #CHROMIUM_EXTRA_ARGS:append = " --use-gl=angle --use-angle=gles-egl --use-cmd-decoder=passthrough"
 
-# Enable "Compositing: Hardware accelerated"
-CHROMIUM_EXTRA_ARGS:append = " --in-process-gpu "
-
-CHROMIUM_EXTRA_ARGS:append = " --no-sandbox --gpu-sandbox-start-early --ignore-gpu-blacklist --ignore-gpu-blocklist --enable-accelerated-video-decode"
-
-# TODO: Revisit once VDA and VEA are not dependent on Vaapi on linux
-CHROMIUM_EXTRA_ARGS:append = " --enable-features=VaapiVideoDecoder,VaapiVideoEncoder"
+# Add these options by default to unify development emviroments.
+# In production enviroment, the need for these options are case by case.
+CHROMIUM_EXTRA_ARGS:append = " --no-sandbox --in-process-gpu "
 
 FILESEXTRAPATHS:prepend := "${THISDIR}/files:"
 
