@@ -35,17 +35,3 @@ do_configure:append() {
 }
 
 INSANE_SKIP:${PN} = "already-stripped"
-
-SRC_URI:append = " file://chromium-init.sh"
-
-do_install:append () {
-	install -d ${D}${sysconfdir}/init.d/
-	install -m 0755 ${WORKDIR}/chromium-init.sh ${D}${sysconfdir}/init.d/
-}
-
-inherit update-rc.d
-
-INITSCRIPT_NAME = "chromium-init.sh"
-INITSCRIPT_PARAMS = "start 99 S ."
-
-FILES:${PN}:append = " ${sysconfdir}/init.d"

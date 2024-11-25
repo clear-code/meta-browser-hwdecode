@@ -8,13 +8,14 @@ DEPENDS = "gstreamer1.0 v4l-utils gstreamer1.0-plugins-base"
 
 SRC_URI = "git://github.com/clear-code/v4l-gst.git;protocol=https;branch=try-rzg2l-support-2 \
 	   file://libv4l-gst.conf \
+	   file://v4l-gst.sh \
           "
 
 SRCREV = "ca79940b37db4198262837c0dbd1f6d83ffddad2"
 
 S = "${WORKDIR}/git"
 
-inherit autotools pkgconfig
+inherit autotools pkgconfig update-rc.d
 
 EXTRA_OECONF += "--enable-chromium-compatibility"
 
@@ -22,7 +23,11 @@ do_install_append () {
 	install -d ${D}/usr/local/include
 	install -m 0644 ${S}/lib/include/libv4l-gst-bufferpool.h ${D}/usr/local/include
 	install -m 0644 -D ${WORKDIR}/libv4l-gst.conf ${D}/etc/xdg/libv4l-gst.conf
+	install -d ${D}${sysconfdir}/init.d
+	install -m 0755 -D ${WORKDIR}/v4l-gst.sh ${D}${sysconfdir}/init.d/v4l-gst
 }
+
+INITSCRIPT_NAME = "v4l-gst"
 
 FILES_${PN}-dbg += "\
 	${libdir}/libv4l/plugins/.debug \
@@ -37,6 +42,7 @@ FILES_${PN}-headers = "/usr/local/include"
 
 FILES_${PN} += "\
 	${libdir}/libv4l/plugins/*.so \
+	${sysconfdir}/init.d \
 "
 
 PACKAGES += "\
