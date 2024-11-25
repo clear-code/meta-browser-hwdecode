@@ -10,5 +10,4 @@
 # Short-Description: Custom initial script for v4l-gst
 ### END INIT INFO
 
-touch /dev/video-gst
-ln -sf /dev/video-gst /dev/video-dec
+touch /dev/video-dec
