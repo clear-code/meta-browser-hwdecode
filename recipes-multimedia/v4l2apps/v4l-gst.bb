@@ -6,12 +6,12 @@ SECTION = "libs"
 
 DEPENDS = "gstreamer1.0 v4l-utils gstreamer1.0-plugins-base"
 
-SRC_URI = "git://github.com/clear-code/v4l-gst.git;protocol=https;branch=try-rzg2l-support-2 \
+SRC_URI = "git://github.com/clear-code/v4l-gst.git;protocol=https;branch=try-rzg2l-support \
 	   file://libv4l-gst.conf \
 	   file://v4l-gst.sh \
           "
 
-SRCREV = "ca79940b37db4198262837c0dbd1f6d83ffddad2"
+SRCREV = "1232309849d92dccd291aee0b6f90e69584ef4b5"
 
 S = "${WORKDIR}/git"
 
