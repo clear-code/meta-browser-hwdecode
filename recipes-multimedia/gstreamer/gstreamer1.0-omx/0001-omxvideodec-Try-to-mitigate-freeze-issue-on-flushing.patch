@@ -1,16 +1,15 @@
-From b4760db208e7adc873fbd6fcbef36543dd897bb7 Mon Sep 17 00:00:00 2001
+From 6efd1669bbfd68c540a947a7afbc00f893f4d499 Mon Sep 17 00:00:00 2001
 From: Takuro Ashie <ashie@clear-code.com>
-Date: Tue, 3 Dec 2024 21:58:46 +0900
+Date: Mon, 9 Dec 2024 13:03:02 +0900
 Subject: [PATCH] omxvideodec: Try to mitigate freeze issue on flushing
 
 Signed-off-by: Takuro Ashie <ashie@clear-code.com>
-
 ---
- omx/gstomxvideodec.c | 48 ++++++++++++++++++++++++++++++++++++++++++++
- 1 file changed, 48 insertions(+)
+ omx/gstomxvideodec.c | 54 ++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 54 insertions(+)
 
 diff --git a/omx/gstomxvideodec.c b/omx/gstomxvideodec.c
-index ec3a1c3..5287e72 100644
+index 00db666..8c53e75 100644
 --- a/omx/gstomxvideodec.c
 +++ b/omx/gstomxvideodec.c
 @@ -75,6 +75,8 @@ static gboolean gst_omx_video_dec_stop (GstVideoDecoder * decoder);
@@ -22,7 +21,7 @@ index ec3a1c3..5287e72 100644
  static GstFlowReturn gst_omx_video_dec_handle_frame (GstVideoDecoder * decoder,
      GstVideoCodecFrame * frame);
  static GstFlowReturn gst_omx_video_dec_finish (GstVideoDecoder * decoder);
-@@ -242,6 +244,7 @@ gst_omx_video_dec_class_init (GstOMXVideoDecClass * klass)
+@@ -286,6 +288,7 @@ gst_omx_video_dec_class_init (GstOMXVideoDecClass * klass)
    video_decoder_class->start = GST_DEBUG_FUNCPTR (gst_omx_video_dec_start);
    video_decoder_class->stop = GST_DEBUG_FUNCPTR (gst_omx_video_dec_stop);
    video_decoder_class->flush = GST_DEBUG_FUNCPTR (gst_omx_video_dec_flush);
@@ -30,7 +29,7 @@ index ec3a1c3..5287e72 100644
    video_decoder_class->set_format =
        GST_DEBUG_FUNCPTR (gst_omx_video_dec_set_format);
    video_decoder_class->handle_frame =
-@@ -3055,6 +3058,51 @@ gst_omx_video_dec_flush (GstVideoDecoder * decoder)
+@@ -3216,6 +3219,57 @@ gst_omx_video_dec_flush (GstVideoDecoder * decoder)
    return TRUE;
  }
  
@@ -54,6 +53,12 @@ index ec3a1c3..5287e72 100644
 +    if (self->egl_out_port)
 +      gst_omx_port_set_flushing (self->egl_out_port, 5 * GST_SECOND, TRUE);
 +#endif
++
++    g_mutex_lock (&self->drain_lock);
++    self->draining = FALSE;
++    g_cond_broadcast (&self->drain_cond);
++    g_mutex_unlock (&self->drain_lock);
++
 +    GST_VIDEO_DECODER_CLASS
 +      (gst_omx_video_dec_parent_class)->sink_event (decoder, event);
 +    return TRUE;
@@ -82,3 +87,6 @@ index ec3a1c3..5287e72 100644
  static GstFlowReturn
  gst_omx_video_dec_handle_frame (GstVideoDecoder * decoder,
      GstVideoCodecFrame * frame)
+-- 
+2.34.1
+
