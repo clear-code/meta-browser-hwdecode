@@ -14,7 +14,6 @@ Building
 
 2. Add the following packages to your IMAGE_INSTALL_append variable in your local.conf
    * v4l-gst
-   * libv4l-dev
 
 `bitbake` as usual.
 
