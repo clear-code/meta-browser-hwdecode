@@ -10,9 +10,9 @@ Currently, only the H264 video codec is supported.
 Building
 ========
 
-1. Add this layer to your bblayers.conf file
+1. Add this layer to your `bblayers.conf` file
 
-2. Add the following packages to your IMAGE_INSTALL_append variable in your local.conf
+2. Add the following packages to your `IMAGE_INSTALL_append` variable in your `local.conf`
    * v4l-gst
 
 `bitbake` as usual.
