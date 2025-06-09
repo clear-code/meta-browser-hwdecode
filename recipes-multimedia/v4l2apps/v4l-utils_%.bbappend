@@ -3,5 +3,5 @@ SRC_URI += " \
 	file://0002-libv4l2-Support-mmap-to-libv4l-plugin.patch \
 "
 
-FILESEXTRAPATHS_prepend := "${THISDIR}/${PN}:"
+FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 

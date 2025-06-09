@@ -19,7 +19,7 @@ inherit autotools pkgconfig update-rc.d
 
 EXTRA_OECONF += "--enable-chromium-compatibility"
 
-do_install_append () {
+do_install:append () {
 	install -d ${D}/usr/local/include
 	install -m 0644 ${S}/lib/include/libv4l-gst-bufferpool.h ${D}/usr/local/include
 	install -m 0644 -D ${WORKDIR}/libv4l-gst.conf ${D}/etc/xdg/libv4l-gst.conf
