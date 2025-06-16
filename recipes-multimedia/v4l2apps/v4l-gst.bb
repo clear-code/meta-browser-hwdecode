@@ -29,18 +29,18 @@ do_install:append () {
 
 INITSCRIPT_NAME = "v4l-gst"
 
-FILES_${PN}-dbg += "\
+FILES:${PN}-dbg += "\
 	${libdir}/libv4l/plugins/.debug \
 	${libdir}/libv4l/plugins/.debug/*.so \
 "
 
-FILES_${PN}-dev += "\
+FILES:${PN}-dev += "\
 	${libdir}/libv4l/plugins/*.la \
 "
 
-FILES_${PN}-headers = "/usr/local/include"
+FILES:${PN}-headers = "/usr/local/include"
 
-FILES_${PN} += "\
+FILES:${PN} += "\
 	${libdir}/libv4l/plugins/*.so \
 	${sysconfdir}/init.d \
 "
