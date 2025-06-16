@@ -1,0 +1,124 @@
+From 4ae443ec4e81bae8c9cffac712ba4f7834be8b87 Mon Sep 17 00:00:00 2001
+From: Kentaro Hayashi <hayashi@clear-code.com>
+Date: Fri, 13 Jun 2025 14:05:31 +0900
+Subject: [PATCH] chromium/boringssl: Add runtime check to detect /proc/cpuinfo
+ Features
+
+Check whether Cryptographic Extesion is available or not in runtime.
+This is just a fallback not to cause illegal instructions on
+board without CE features.
+
+Upstream-Status: Inappropriate [rzg2l specific]
+Signed-off-by: Kentaro Hayashi <hayashi@clear-code.com>
+---
+ third_party/boringssl/src/crypto/internal.h | 58 +++++++++++++++++++--
+ 1 file changed, 54 insertions(+), 4 deletions(-)
+
+diff --git a/third_party/boringssl/src/crypto/internal.h b/third_party/boringssl/src/crypto/internal.h
+index ca3702795..700c61060 100644
+--- a/third_party/boringssl/src/crypto/internal.h
++++ b/third_party/boringssl/src/crypto/internal.h
+@@ -175,6 +175,12 @@ OPENSSL_MSVC_PRAGMA(warning(push, 3))
+ OPENSSL_MSVC_PRAGMA(warning(pop))
+ #endif
+ 
++// Use getauxval(AT_HWCAP) to detect Features in /proc/cpuinfo
++#if defined(__aarch64__) && defined(__linux__)
++#include <asm/hwcap.h>
++#include <sys/auxv.h>
++#endif
++
+ #if defined(__cplusplus)
+ extern "C" {
+ #endif
+@@ -1668,7 +1674,15 @@ OPENSSL_INLINE int CRYPTO_is_NEON_capable(void) {
+ 
+ OPENSSL_INLINE int CRYPTO_is_ARMv8_AES_capable(void) {
+ #if defined(OPENSSL_STATIC_ARMCAP_AES) || defined(__ARM_FEATURE_AES)
+-  return 1;
++  // Check whether Cryptographic Extesion is available or not in runtime
++  // This is just a fallback not to cause illegal instructions on
++  // board without CE feature.
++  int64_t hwcaps = getauxval(AT_HWCAP);
++  if (hwcaps & HWCAP_AES) {
++    return 1;
++  } else {
++    return 0;
++  }
+ #elif defined(OPENSSL_STATIC_ARMCAP)
+   return 0;
+ #else
+@@ -1678,7 +1692,15 @@ OPENSSL_INLINE int CRYPTO_is_ARMv8_AES_capable(void) {
+ 
+ OPENSSL_INLINE int CRYPTO_is_ARMv8_PMULL_capable(void) {
+ #if defined(OPENSSL_STATIC_ARMCAP_PMULL) || defined(__ARM_FEATURE_AES)
+-  return 1;
++  // Check whether Cryptographic Extesion is available or not in runtime
++  // This is just a fallback not to cause illegal instructions on
++  // board without CE feature.
++  int64_t hwcaps = getauxval(AT_HWCAP);
++  if (hwcaps & HWCAP_PMULL) {
++    return 1;
++  } else {
++    return 0;
++  }
+ #elif defined(OPENSSL_STATIC_ARMCAP)
+   return 0;
+ #else
+@@ -1690,7 +1712,15 @@ OPENSSL_INLINE int CRYPTO_is_ARMv8_SHA1_capable(void) {
+   // SHA-1 and SHA-2 (only) share |__ARM_FEATURE_SHA2| but otherwise
+   // are dealt with independently.
+ #if defined(OPENSSL_STATIC_ARMCAP_SHA1) || defined(__ARM_FEATURE_SHA2)
+-  return 1;
++  // Check whether Cryptographic Extesion is available or not in runtime
++  // This is just a fallback not to cause illegal instructions on
++  // board without CE feature.
++  int64_t hwcaps = getauxval(AT_HWCAP);
++  if (hwcaps & HWCAP_SHA1) {
++    return 1;
++  } else {
++    return 0;
++  }
+ #elif defined(OPENSSL_STATIC_ARMCAP)
+   return 0;
+ #else
+@@ -1702,7 +1732,19 @@ OPENSSL_INLINE int CRYPTO_is_ARMv8_SHA256_capable(void) {
+   // SHA-1 and SHA-2 (only) share |__ARM_FEATURE_SHA2| but otherwise
+   // are dealt with independently.
+ #if defined(OPENSSL_STATIC_ARMCAP_SHA256) || defined(__ARM_FEATURE_SHA2)
++  // Check whether Cryptographic Extesion is available or not in runtime
++  // This is just a fallback not to cause illegal instructions on
++  // board without CE feature.
++  int64_t hwcaps = getauxval(AT_HWCAP);
++#if defined(HWCAP_SHA256)
++  if (hwcaps & HWCAP_SHA256) {
++    return 1;
++  } else {
++    return 0;
++  }
++#else
+   return 1;
++#endif
+ #elif defined(OPENSSL_STATIC_ARMCAP)
+   return 0;
+ #else
+@@ -1713,7 +1755,15 @@ OPENSSL_INLINE int CRYPTO_is_ARMv8_SHA256_capable(void) {
+ OPENSSL_INLINE int CRYPTO_is_ARMv8_SHA512_capable(void) {
+   // There is no |OPENSSL_STATIC_ARMCAP_SHA512|.
+ #if defined(__ARM_FEATURE_SHA512)
+-  return 1;
++  // Check whether Cryptographic Extesion is available or not in runtime
++  // This is just a fallback not to cause illegal instructions on
++  // board without CE feature.
++  int64_t hwcaps = getauxval(AT_HWCAP);
++  if (hwcaps & HWCAP_SHA512) {
++    return 1;
++  } else {
++    return 0;
++  }
+ #elif defined(OPENSSL_STATIC_ARMCAP)
+   return 0;
+ #else
+-- 
+2.49.0
+
