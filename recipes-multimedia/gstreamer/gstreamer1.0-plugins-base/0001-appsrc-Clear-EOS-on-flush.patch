@@ -1,3 +1,4 @@
+From a9588908a2dbed7b7c6a4919587272012e320d63 Mon Sep 17 00:00:00 2001
 From: Damian Hobson-Garcia <dhobsong@igel.co.jp>
 Date: Thu, 28 Sep 2017 18:20:42 +0900
 Subject: [PATCH] appsrc: Clear EOS on flush
@@ -7,15 +8,18 @@ the FLUSH_START/STOP events, but these events are input at the
 source pad of the pipeline source, and therefore are not passed
 to the source plugin callback.  Instead do the processing in the
 event callback on the plugin source pad.
+
+Upstream-Status: Pending
+See https://github.com/igel-oss/meta-browser-hwdecode/blob/master/recipes-multimedia/gstreamer/gstreamer1.0-plugins-base_1.6.3/0001-appsrc-Clear-EOS-on-flush.patch
 ---
  gst-libs/gst/app/gstappsrc.c | 1 +
  1 file changed, 1 insertion(+)
 
 diff --git a/gst-libs/gst/app/gstappsrc.c b/gst-libs/gst/app/gstappsrc.c
-index fff99e9..1bbe7b1 100644
+index 8577f61..29f325c 100644
 --- a/gst-libs/gst/app/gstappsrc.c
 +++ b/gst-libs/gst/app/gstappsrc.c
-@@ -779,6 +779,7 @@ gst_app_src_send_event (GstElement * element, GstEvent * event)
+@@ -1021,6 +1021,7 @@ gst_app_src_send_event (GstElement * element, GstEvent * event)
      case GST_EVENT_FLUSH_STOP:
        g_mutex_lock (&priv->mutex);
        gst_app_src_flush_queued (appsrc, TRUE);
@@ -23,6 +27,6 @@ index fff99e9..1bbe7b1 100644
        g_mutex_unlock (&priv->mutex);
        break;
      default:
---
-1.9.1
+-- 
+2.49.0
 
