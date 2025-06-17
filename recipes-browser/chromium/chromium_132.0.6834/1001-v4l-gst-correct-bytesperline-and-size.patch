@@ -1,0 +1,35 @@
+From 26c24439ba174b4041e3ac902ba5220cefa4c1e6 Mon Sep 17 00:00:00 2001
+From: Kentaro Hayashi <kenhys@gmail.com>
+Date: Tue, 17 Jun 2025 17:12:15 +0900
+Subject: [PATCH 1/2] v4l-gst: re-read format for initizing a bytesperline.
+
+Upstream-Status: Pending
+Ported from
+https://github.com/clear-code/meta-browser-hwdecode/blob/try-rzg2l-v4.0-support/recipes-browser/chromium/chromium_109.0.5414/1001-v4l-gst-correct-bytesperline-and-size.patch
+---
+ media/gpu/v4l2/v4l2_queue.cc | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/media/gpu/v4l2/v4l2_queue.cc b/media/gpu/v4l2/v4l2_queue.cc
+index feb783042b..d98c8b621f 100644
+--- a/media/gpu/v4l2/v4l2_queue.cc
++++ b/media/gpu/v4l2/v4l2_queue.cc
+@@ -1214,6 +1214,15 @@ size_t V4L2Queue::AllocateBuffers(size_t count,
+ 
+   memory_ = memory;
+ 
++  // v4l-gst: re-read format for initizing a bytesperline.  v4l-gst
++  // could not get size and bytesperline parameter until buffer (ioctl
++  // VIDIOC_REQBUFS) had been obtained.
++  format = GetFormat().first;
++  if (!format) {
++    VQLOGF(1) << "Cannot get format.";
++    return 0;
++  }
++
+   free_buffers_ = new V4L2BuffersList();
+ 
+   // Now query all buffer information.
+-- 
+2.49.0
+

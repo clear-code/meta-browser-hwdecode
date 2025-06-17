@@ -1,0 +1,33 @@
+From a3c3eb30f2fdac8d84f17d74bddd7607caa31a3a Mon Sep 17 00:00:00 2001
+From: Kentaro Hayashi <kenhys@gmail.com>
+Date: Tue, 17 Jun 2025 17:30:17 +0900
+Subject: [PATCH 2/2] v4l2-gst: Load libv4l2.so.0 instead of libv4l2.so
+
+SO version should be added to keep binary compatibility, and to work
+without development pacage.
+
+Upstream-Status: Pending
+Ported from https://github.com/clear-code/meta-browser-hwdecode/blob/try-rzg2l-v4.0-support/recipes-browser/chromium/chromium_109.0.5414/1003-Load-libv4l2.so.0-instead-of-libv4l2.so.patch
+---
+ media/gpu/v4l2/v4l2_device.cc | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/media/gpu/v4l2/v4l2_device.cc b/media/gpu/v4l2/v4l2_device.cc
+index 469c9323e5..86f661f8ab 100644
+--- a/media/gpu/v4l2/v4l2_device.cc
++++ b/media/gpu/v4l2/v4l2_device.cc
+@@ -44,9 +44,9 @@ using media_gpu_v4l2::StubPathMap;
+ 
+ inline static constexpr char kLibV4l2Path[] =
+ #if defined(__aarch64__)
+-      "/usr/lib64/libv4l2.so";
++      "/usr/lib64/libv4l2.so.0";
+ #else
+-      "/usr/lib/libv4l2.so";
++      "/usr/lib/libv4l2.so.0";
+ #endif
+ 
+ namespace media {
+-- 
+2.49.0
+
