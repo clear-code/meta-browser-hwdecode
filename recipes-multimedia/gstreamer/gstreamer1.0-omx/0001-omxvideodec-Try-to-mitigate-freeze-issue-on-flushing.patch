@@ -1,18 +1,21 @@
-From 6efd1669bbfd68c540a947a7afbc00f893f4d499 Mon Sep 17 00:00:00 2001
+From c82aeea3ade901484f7f4afbfe7407581ee62e35 Mon Sep 17 00:00:00 2001
 From: Takuro Ashie <ashie@clear-code.com>
 Date: Mon, 9 Dec 2024 13:03:02 +0900
 Subject: [PATCH] omxvideodec: Try to mitigate freeze issue on flushing
 
+Upstream-Status: Pending
+
 Signed-off-by: Takuro Ashie <ashie@clear-code.com>
+Signed-off-by: Kentaro Hayashi <hayashi@clear-code.com>
 ---
  omx/gstomxvideodec.c | 54 ++++++++++++++++++++++++++++++++++++++++++++
  1 file changed, 54 insertions(+)
 
 diff --git a/omx/gstomxvideodec.c b/omx/gstomxvideodec.c
-index 00db666..8c53e75 100644
+index 917ce8a..e9ec81e 100644
 --- a/omx/gstomxvideodec.c
 +++ b/omx/gstomxvideodec.c
-@@ -75,6 +75,8 @@ static gboolean gst_omx_video_dec_stop (GstVideoDecoder * decoder);
+@@ -69,6 +69,8 @@ static gboolean gst_omx_video_dec_stop (GstVideoDecoder * decoder);
  static gboolean gst_omx_video_dec_set_format (GstVideoDecoder * decoder,
      GstVideoCodecState * state);
  static gboolean gst_omx_video_dec_flush (GstVideoDecoder * decoder);
@@ -21,7 +24,7 @@ index 00db666..8c53e75 100644
  static GstFlowReturn gst_omx_video_dec_handle_frame (GstVideoDecoder * decoder,
      GstVideoCodecFrame * frame);
  static GstFlowReturn gst_omx_video_dec_finish (GstVideoDecoder * decoder);
-@@ -286,6 +288,7 @@ gst_omx_video_dec_class_init (GstOMXVideoDecClass * klass)
+@@ -172,6 +174,7 @@ gst_omx_video_dec_class_init (GstOMXVideoDecClass * klass)
    video_decoder_class->start = GST_DEBUG_FUNCPTR (gst_omx_video_dec_start);
    video_decoder_class->stop = GST_DEBUG_FUNCPTR (gst_omx_video_dec_stop);
    video_decoder_class->flush = GST_DEBUG_FUNCPTR (gst_omx_video_dec_flush);
@@ -29,7 +32,7 @@ index 00db666..8c53e75 100644
    video_decoder_class->set_format =
        GST_DEBUG_FUNCPTR (gst_omx_video_dec_set_format);
    video_decoder_class->handle_frame =
-@@ -3216,6 +3219,57 @@ gst_omx_video_dec_flush (GstVideoDecoder * decoder)
+@@ -2961,6 +2964,57 @@ gst_omx_video_dec_flush (GstVideoDecoder * decoder)
    return TRUE;
  }
  
@@ -88,5 +91,5 @@ index 00db666..8c53e75 100644
  gst_omx_video_dec_handle_frame (GstVideoDecoder * decoder,
      GstVideoCodecFrame * frame)
 -- 
-2.34.1
+2.49.0
 
