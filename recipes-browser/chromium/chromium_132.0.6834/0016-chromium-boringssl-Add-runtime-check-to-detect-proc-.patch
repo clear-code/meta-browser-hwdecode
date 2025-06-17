@@ -1,4 +1,4 @@
-From 4ae443ec4e81bae8c9cffac712ba4f7834be8b87 Mon Sep 17 00:00:00 2001
+From 23ce5cea905a8c3470ba3e75399eba068e86f991 Mon Sep 17 00:00:00 2001
 From: Kentaro Hayashi <hayashi@clear-code.com>
 Date: Fri, 13 Jun 2025 14:05:31 +0900
 Subject: [PATCH] chromium/boringssl: Add runtime check to detect /proc/cpuinfo
@@ -15,7 +15,7 @@ Signed-off-by: Kentaro Hayashi <hayashi@clear-code.com>
  1 file changed, 54 insertions(+), 4 deletions(-)
 
 diff --git a/third_party/boringssl/src/crypto/internal.h b/third_party/boringssl/src/crypto/internal.h
-index ca3702795..700c61060 100644
+index ca3702795..9eb124089 100644
 --- a/third_party/boringssl/src/crypto/internal.h
 +++ b/third_party/boringssl/src/crypto/internal.h
 @@ -175,6 +175,12 @@ OPENSSL_MSVC_PRAGMA(warning(push, 3))
@@ -74,7 +74,7 @@ index ca3702795..700c61060 100644
 +  // This is just a fallback not to cause illegal instructions on
 +  // board without CE feature.
 +  int64_t hwcaps = getauxval(AT_HWCAP);
-+  if (hwcaps & HWCAP_SHA1) {
++  if (hwcaps & HWCAP_SHA2) {
 +    return 1;
 +  } else {
 +    return 0;
