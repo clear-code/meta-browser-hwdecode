@@ -1,0 +1,98 @@
+From 1d1a68806d7b027162cbf05e825932de7c01d7cd Mon Sep 17 00:00:00 2001
+From: Kentaro Hayashi <hayashi@clear-code.com>
+Date: Tue, 17 Jun 2025 18:47:02 +0900
+Subject: [PATCH 3/3] v4l-gst: correct offset
+
+Upstream-Status: Pending
+Port from
+https://github.com/clear-code/meta-browser-hwdecode/blob/try-rzg2l-v4.0-support/recipes-browser/chromium/chromium_109.0.5414/1002-v4l-gst-correct-offset.patch
+---
+ media/gpu/v4l2/v4l2_queue.cc | 22 +++++++++++++++++++++-
+ media/gpu/v4l2/v4l2_utils.cc | 16 ++++++++++++++--
+ media/gpu/v4l2/v4l2_utils.h  |  3 +++
+ 3 files changed, 38 insertions(+), 3 deletions(-)
+
+diff --git a/media/gpu/v4l2/v4l2_queue.cc b/media/gpu/v4l2/v4l2_queue.cc
+index d98c8b621f..0b41e11c62 100644
+--- a/media/gpu/v4l2/v4l2_queue.cc
++++ b/media/gpu/v4l2/v4l2_queue.cc
+@@ -312,7 +312,27 @@ size_t V4L2Buffer::GetMemoryUsage() const {
+ }
+ 
+ scoped_refptr<FrameResource> V4L2Buffer::CreateFrame() {
+-  auto layout = V4L2FormatToVideoFrameLayout(format_);
++  // To get offset value that is used by eglCreateImageKHR, call custom
++  // ioctl VIDIOC_EXPBUF with type V4L2_BUF_TYPE_PRIVATE.
++  std::vector<int> offsets;
++  const v4l2_pix_format_mplane& pix_mp = format_.fmt.pix_mp;
++  const size_t num_buffers = pix_mp.num_planes;
++  for (size_t i = 0; i < num_buffers; ++i) {
++    struct v4l2_exportbuffer expbuf = {0};
++    expbuf.type = V4L2_BUF_TYPE_PRIVATE;
++    expbuf.index = v4l2_buffer_.index;
++    expbuf.plane = i;
++    expbuf.flags = O_CLOEXEC;
++    if (device_->Ioctl(VIDIOC_EXPBUF, &expbuf) != 0) {
++      offsets.emplace_back(0);
++      continue;
++    }
++    offsets.emplace_back(expbuf.reserved[0]);
++  }
++
++  // since ioctl func could not be called in
++  // V4L2FormatToVideoFrameLayout, pass offsets as argument.
++  auto layout = V4L2FormatToVideoFrameLayout(format_, offsets);
+   if (!layout) {
+     VLOGF(1) << "Cannot create frame layout for V4L2 buffers";
+     return nullptr;
+diff --git a/media/gpu/v4l2/v4l2_utils.cc b/media/gpu/v4l2/v4l2_utils.cc
+index 795325661b..b7a92fe672 100644
+--- a/media/gpu/v4l2/v4l2_utils.cc
++++ b/media/gpu/v4l2/v4l2_utils.cc
+@@ -261,6 +261,17 @@ size_t GetNumPlanesOfV4L2PixFmt(uint32_t pix_fmt) {
+ 
+ std::optional<VideoFrameLayout> V4L2FormatToVideoFrameLayout(
+     const struct v4l2_format& format) {
++  std::vector<int> offsets;
++  const v4l2_pix_format_mplane& pix_mp = format.fmt.pix_mp;
++  const size_t num_buffers = pix_mp.num_planes;
++  for (size_t i = 0; i < num_buffers; ++i) {
++    offsets.emplace_back(0u);
++  }
++  return V4L2FormatToVideoFrameLayout(format, offsets);
++}
++
++std::optional<VideoFrameLayout> V4L2FormatToVideoFrameLayout(
++  const struct v4l2_format& format, std::vector<int> offsets) {
+   if (!V4L2_TYPE_IS_MULTIPLANAR(format.type)) {
+     VLOGF(1) << "v4l2_buf_type is not multiplanar: " << std::hex << "0x"
+              << format.type;
+@@ -294,8 +305,9 @@ std::optional<VideoFrameLayout> V4L2FormatToVideoFrameLayout(
+   planes.reserve(num_color_planes);
+   for (size_t i = 0; i < num_buffers; ++i) {
+     const v4l2_plane_pix_format& plane_format = pix_mp.plane_fmt[i];
+-    planes.emplace_back(static_cast<int32_t>(plane_format.bytesperline), 0u,
+-                        plane_format.sizeimage);
++    int off = (offsets.size() == num_buffers) ? offsets[i] : 0;
++    planes.emplace_back(static_cast<int32_t>(plane_format.bytesperline), off,
++                       plane_format.sizeimage);
+   }
+   // For the case that #color planes > #buffers, it fills stride of color
+   // plane which does not map to buffer.
+diff --git a/media/gpu/v4l2/v4l2_utils.h b/media/gpu/v4l2/v4l2_utils.h
+index a323bd9d6f..6a0be7c5c5 100644
+--- a/media/gpu/v4l2/v4l2_utils.h
++++ b/media/gpu/v4l2/v4l2_utils.h
+@@ -138,6 +138,9 @@ size_t GetNumPlanesOfV4L2PixFmt(uint32_t pix_fmt);
+ std::optional<VideoFrameLayout> V4L2FormatToVideoFrameLayout(
+     const struct v4l2_format& format);
+ 
++std::optional<VideoFrameLayout> V4L2FormatToVideoFrameLayout(
++    const struct v4l2_format& format, std::vector<int> offsets);
++
+ // Query the driver to see what scalability modes are supported for the driver.
+ std::vector<SVCScalabilityMode> GetSupportedScalabilityModesForV4L2Codec(
+     const IoctlAsCallback& ioctl_cb,
+-- 
+2.49.0
+
