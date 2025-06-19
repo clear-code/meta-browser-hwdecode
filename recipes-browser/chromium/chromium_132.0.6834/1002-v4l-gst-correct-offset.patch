@@ -1,4 +1,4 @@
-From 1d1a68806d7b027162cbf05e825932de7c01d7cd Mon Sep 17 00:00:00 2001
+From c98fc0f46f4dd1b6ddf17c15fede3708a20de0fe Mon Sep 17 00:00:00 2001
 From: Kentaro Hayashi <hayashi@clear-code.com>
 Date: Tue, 17 Jun 2025 18:47:02 +0900
 Subject: [PATCH 3/3] v4l-gst: correct offset
@@ -13,7 +13,7 @@ https://github.com/clear-code/meta-browser-hwdecode/blob/try-rzg2l-v4.0-support/
  3 files changed, 38 insertions(+), 3 deletions(-)
 
 diff --git a/media/gpu/v4l2/v4l2_queue.cc b/media/gpu/v4l2/v4l2_queue.cc
-index d98c8b621f..0b41e11c62 100644
+index d98c8b621f..be01ce3666 100644
 --- a/media/gpu/v4l2/v4l2_queue.cc
 +++ b/media/gpu/v4l2/v4l2_queue.cc
 @@ -312,7 +312,27 @@ size_t V4L2Buffer::GetMemoryUsage() const {
@@ -32,7 +32,7 @@ index d98c8b621f..0b41e11c62 100644
 +    expbuf.index = v4l2_buffer_.index;
 +    expbuf.plane = i;
 +    expbuf.flags = O_CLOEXEC;
-+    if (device_->Ioctl(VIDIOC_EXPBUF, &expbuf) != 0) {
++    if (ioctl_cb_.Run(VIDIOC_EXPBUF, &expbuf) != 0) {
 +      offsets.emplace_back(0);
 +      continue;
 +    }
@@ -94,5 +94,5 @@ index a323bd9d6f..6a0be7c5c5 100644
  std::vector<SVCScalabilityMode> GetSupportedScalabilityModesForV4L2Codec(
      const IoctlAsCallback& ioctl_cb,
 -- 
-2.49.0
+2.50.0
 
