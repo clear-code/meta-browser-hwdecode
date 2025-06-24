@@ -10,16 +10,6 @@ PACKAGECONFIG[use-linux-v4l2] = "use_v4l2_codec=true use_v4lplugin=true use_linu
 
 GN_ARGS:append = " fatal_linker_warnings=false"
 
-# Switch to ANGLE, since the newer ozone requires passthrough command decoder.
-# See:
-# https://issues.chromium.org/issues/40135856
-#CHROMIUM_EXTRA_ARGS:remove = "--use-gl=egl"
-#CHROMIUM_EXTRA_ARGS:append = " --use-gl=angle --use-angle=gles-egl --use-cmd-decoder=passthrough"
-
-# Add these options by default to unify development emviroments.
-# In production enviroment, the need for these options are case by case.
-CHROMIUM_EXTRA_ARGS:append = " --no-sandbox --in-process-gpu "
-
 FILESEXTRAPATHS:prepend := "${THISDIR}/files:"
 
 # Fixup v8_qemu_wrapper library search path for component build
