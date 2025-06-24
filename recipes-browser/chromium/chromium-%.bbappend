@@ -10,6 +10,9 @@ PACKAGECONFIG[use-linux-v4l2] = "use_v4l2_codec=true use_v4lplugin=true use_linu
 
 GN_ARGS:append = " fatal_linker_warnings=false"
 
+# Need to escape '/' because this value is proccessed by sed with '/' delimiter
+CHROMIUM_EXTRA_ARGS:append = " --dri-render-node-path=\/dev\/dri\/card0 "
+
 FILESEXTRAPATHS:prepend := "${THISDIR}/files:"
 
 # Fixup v8_qemu_wrapper library search path for component build
