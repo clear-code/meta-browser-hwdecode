@@ -1,0 +1,96 @@
+From 8e8732d1f04a6e8d8b901d66d71ff239046c307e Mon Sep 17 00:00:00 2001
+From: Takuro Ashie <ashie@clear-code.com>
+Date: Tue, 24 Jun 2025 16:13:14 +0900
+Subject: [PATCH] Add a command line option to specify render node path of DRI
+
+Upstream-Status: Pending
+---
+ content/browser/gpu/gpu_process_host.cc       |  1 +
+ .../common/drm_render_node_path_finder.cc     | 22 +++++++++++++++++++
+ ui/ozone/public/ozone_switches.cc             |  3 +++
+ ui/ozone/public/ozone_switches.h              |  2 ++
+ 4 files changed, 28 insertions(+)
+
+diff --git a/content/browser/gpu/gpu_process_host.cc b/content/browser/gpu/gpu_process_host.cc
+index 513b55e316b16..9caf080715ec7 100644
+--- a/content/browser/gpu/gpu_process_host.cc
++++ b/content/browser/gpu/gpu_process_host.cc
+@@ -301,6 +301,7 @@ static const char* const kSwitchNames[] = {
+     switches::kDisableExplicitDmaFences,
+     switches::kOzoneDumpFile,
+     switches::kEnableNativeGpuMemoryBuffers,
++    switches::kDriRenderNodePath,
+ #endif
+ #if BUILDFLAG(IS_LINUX)
+     switches::kX11Display,
+diff --git a/ui/ozone/platform/wayland/common/drm_render_node_path_finder.cc b/ui/ozone/platform/wayland/common/drm_render_node_path_finder.cc
+index b3344e58a46ad..9242bc3fc480c 100644
+--- a/ui/ozone/platform/wayland/common/drm_render_node_path_finder.cc
++++ b/ui/ozone/platform/wayland/common/drm_render_node_path_finder.cc
+@@ -18,9 +18,11 @@
+ 
+ #include <string>
+ 
++#include "base/command_line.h"
+ #include "base/files/scoped_file.h"
+ #include "base/strings/stringprintf.h"
+ #include "ui/gfx/linux/scoped_gbm_device.h"  // nogncheck
++#include "ui/ozone/public/ozone_switches.h"
+ 
+ namespace ui {
+ 
+@@ -48,6 +50,26 @@ base::FilePath DrmRenderNodePathFinder::GetDrmRenderNodePath() const {
+ }
+ 
+ void DrmRenderNodePathFinder::FindDrmRenderNodePath() {
++  // Search paths specified by command line switch
++  base::CommandLine* cmd_line = base::CommandLine::ForCurrentProcess();
++  const std::string path_from_cmd_line =
++    cmd_line->GetSwitchValueASCII(switches::kDriRenderNodePath);
++  std::vector<std::string> paths;
++  if (!path_from_cmd_line.empty())
++    paths.push_back(path_from_cmd_line);
++
++  for (auto path : paths) {
++    base::ScopedFD drm_fd(open(path.c_str(), O_RDWR));
++    if (drm_fd.get() > 0) {
++      ScopedGbmDevice device(gbm_create_device(drm_fd.get()));
++      if (device) {
++        drm_render_node_path_ = base::FilePath(path);
++        return;
++      }
++    }
++  }
++
++  // Search normal paths
+   for (uint32_t i = kRenderNodeStart; i < kRenderNodeEnd; i++) {
+     /* First,  look in sysfs and skip if this is the vgem render node. */
+     std::string node_link(
+diff --git a/ui/ozone/public/ozone_switches.cc b/ui/ozone/public/ozone_switches.cc
+index cdf94e4cf7571..708cb63ba9bce 100644
+--- a/ui/ozone/public/ozone_switches.cc
++++ b/ui/ozone/public/ozone_switches.cc
+@@ -37,4 +37,7 @@ const char kDisableExplicitDmaFences[] = "disable-explicit-dma-fences";
+ // Specifies ozone screen size.
+ const char kOzoneOverrideScreenSize[] = "ozone-override-screen-size";
+ 
++// Specifies DRI render node path.
++const char kDriRenderNodePath[] = "dri-render-node-path";
++
+ }  // namespace switches
+diff --git a/ui/ozone/public/ozone_switches.h b/ui/ozone/public/ozone_switches.h
+index d31131f4d3f23..2ab4276debd18 100644
+--- a/ui/ozone/public/ozone_switches.h
++++ b/ui/ozone/public/ozone_switches.h
+@@ -29,6 +29,8 @@ COMPONENT_EXPORT(OZONE_SWITCHES) extern const char kDisableExplicitDmaFences[];
+ 
+ COMPONENT_EXPORT(OZONE_SWITCHES) extern const char kOzoneOverrideScreenSize[];
+ 
++COMPONENT_EXPORT(OZONE_SWITCHES) extern const char kDriRenderNodePath[];
++
+ }  // namespace switches
+ 
+ #endif  // UI_OZONE_PUBLIC_OZONE_SWITCHES_H_
+-- 
+2.43.0
+
