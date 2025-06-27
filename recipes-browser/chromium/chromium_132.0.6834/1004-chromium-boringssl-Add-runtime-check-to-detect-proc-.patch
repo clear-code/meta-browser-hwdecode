@@ -1,4 +1,4 @@
-From 440229983d8526b63c1cd86f3864a600bf65554e Mon Sep 17 00:00:00 2001
+From c3eb257543f96df97d475694fc8fae20ad6d743f Mon Sep 17 00:00:00 2001
 From: Kentaro Hayashi <hayashi@clear-code.com>
 Date: Fri, 27 Jun 2025 14:12:37 +0900
 Subject: [PATCH] chromium/boringssl: Add runtime check to detect /proc/cpuinfo
@@ -11,37 +11,9 @@ board without CE features.
 Upstream-Status: Inappropriate [rzg2l specific]
 Signed-off-by: Kentaro Hayashi <hayashi@clear-code.com>
 ---
- .../src/crypto/fipsmodule/aes/internal.h      |  2 +-
- .../src/crypto/fipsmodule/modes/internal.h    |  2 +-
- third_party/boringssl/src/crypto/internal.h   | 56 +++++++++++++++++--
- 3 files changed, 53 insertions(+), 7 deletions(-)
+ third_party/boringssl/src/crypto/internal.h | 56 +++++++++++++++++++--
+ 1 file changed, 51 insertions(+), 5 deletions(-)
 
-diff --git a/third_party/boringssl/src/crypto/fipsmodule/aes/internal.h b/third_party/boringssl/src/crypto/fipsmodule/aes/internal.h
-index a89da469d4..6458873c5e 100644
---- a/third_party/boringssl/src/crypto/fipsmodule/aes/internal.h
-+++ b/third_party/boringssl/src/crypto/fipsmodule/aes/internal.h
-@@ -58,7 +58,7 @@ OPENSSL_INLINE int vpaes_capable(void) { return CRYPTO_is_NEON_capable(); }
- #define VPAES
- #define VPAES_CBC
- #define VPAES_CTR32
--OPENSSL_INLINE int vpaes_capable(void) { return CRYPTO_is_NEON_capable(); }
-+OPENSSL_INLINE int vpaes_capable(void) { return CRYPTO_is_NEON_capable() && CRYPTO_is_ARMv8_AES_capable(); }
- #endif
- 
- #endif
-diff --git a/third_party/boringssl/src/crypto/fipsmodule/modes/internal.h b/third_party/boringssl/src/crypto/fipsmodule/modes/internal.h
-index 3b84015dd8..8c23ea5f47 100644
---- a/third_party/boringssl/src/crypto/fipsmodule/modes/internal.h
-+++ b/third_party/boringssl/src/crypto/fipsmodule/modes/internal.h
-@@ -307,7 +307,7 @@ void gcm_gmult_v8(uint8_t Xi[16], const u128 Htable[16]);
- void gcm_ghash_v8(uint8_t Xi[16], const u128 Htable[16], const uint8_t *inp,
-                   size_t len);
- 
--OPENSSL_INLINE int gcm_neon_capable(void) { return CRYPTO_is_NEON_capable(); }
-+OPENSSL_INLINE int gcm_neon_capable(void) { return CRYPTO_is_NEON_capable() && CRYPTO_is_ARMv8_AES_capable(); }
- 
- void gcm_init_neon(u128 Htable[16], const uint64_t H[2]);
- void gcm_gmult_neon(uint8_t Xi[16], const u128 Htable[16]);
 diff --git a/third_party/boringssl/src/crypto/internal.h b/third_party/boringssl/src/crypto/internal.h
 index ca37027956..6ba8a34c5a 100644
 --- a/third_party/boringssl/src/crypto/internal.h
