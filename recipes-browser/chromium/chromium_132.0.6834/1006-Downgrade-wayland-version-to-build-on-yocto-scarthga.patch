@@ -1,0 +1,27 @@
+From 4c0ab3feb3e950f99c4fda79c68288b655ed16d3 Mon Sep 17 00:00:00 2001
+From: Takuro Ashie <ashie@clear-code.com>
+Date: Tue, 1 Jul 2025 15:38:25 +0900
+Subject: [PATCH] Downgrade wayland version to build on yocto scarthgap
+
+It assumes that use with use_system_libwayland=true.
+
+Upstream-Status: Inappropriate [oe specific]
+---
+ third_party/wayland/wayland_version.gni | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/third_party/wayland/wayland_version.gni b/third_party/wayland/wayland_version.gni
+index 90bb80af41456..6f9f32fa6618c 100644
+--- a/third_party/wayland/wayland_version.gni
++++ b/third_party/wayland/wayland_version.gni
+@@ -4,5 +4,5 @@
+ # is true to check system wayland package version meets
+ # at least the version of third-party/wayland so that it won't
+ # make any compile error with chromium
+-wayland_version = "1.23.0"
+-wayland_egl_version = "18.1.0"
++wayland_version = "1.22.0"
++wayland_egl_version = "1.0.0"
+-- 
+2.43.0
+
