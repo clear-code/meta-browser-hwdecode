@@ -1,19 +1,24 @@
-From a3c3eb30f2fdac8d84f17d74bddd7607caa31a3a Mon Sep 17 00:00:00 2001
+From 568853fb913878aab91a9fc6a7d8d51305c3987b Mon Sep 17 00:00:00 2001
 From: Kentaro Hayashi <kenhys@gmail.com>
 Date: Tue, 17 Jun 2025 17:30:17 +0900
-Subject: [PATCH 2/2] v4l2-gst: Load libv4l2.so.0 instead of libv4l2.so
+Subject: [PATCH] v4l2-gst: Load libv4l2.so.0 instead of libv4l2.so
 
 SO version should be added to keep binary compatibility, and to work
 without development pacage.
 
+NOTE: There is no /usr/lib64 on RZG2L with VLP 4.0.0
+
 Upstream-Status: Pending
 Ported from https://github.com/clear-code/meta-browser-hwdecode/blob/try-rzg2l-v4.0-support/recipes-browser/chromium/chromium_109.0.5414/1003-Load-libv4l2.so.0-instead-of-libv4l2.so.patch
+
+Signed-off-by: Kentaro Hayashi <hayashi@clear-code.com>
 ---
  media/gpu/v4l2/v4l2_device.cc | 4 ++--
- 1 file changed, 2 insertions(+), 2 deletions(-)
+ media/gpu/v4l2/v4l2_utils.cc  | 4 ++--
+ 2 files changed, 4 insertions(+), 4 deletions(-)
 
 diff --git a/media/gpu/v4l2/v4l2_device.cc b/media/gpu/v4l2/v4l2_device.cc
-index 469c9323e5..86f661f8ab 100644
+index 469c9323e5..75a4fefcf3 100644
 --- a/media/gpu/v4l2/v4l2_device.cc
 +++ b/media/gpu/v4l2/v4l2_device.cc
 @@ -44,9 +44,9 @@ using media_gpu_v4l2::StubPathMap;
@@ -21,13 +26,29 @@ index 469c9323e5..86f661f8ab 100644
  inline static constexpr char kLibV4l2Path[] =
  #if defined(__aarch64__)
 -      "/usr/lib64/libv4l2.so";
-+      "/usr/lib64/libv4l2.so.0";
++      "/usr/lib/libv4l2.so.0";
  #else
 -      "/usr/lib/libv4l2.so";
 +      "/usr/lib/libv4l2.so.0";
  #endif
  
  namespace media {
+diff --git a/media/gpu/v4l2/v4l2_utils.cc b/media/gpu/v4l2/v4l2_utils.cc
+index b7a92fe672..084f0d6717 100644
+--- a/media/gpu/v4l2/v4l2_utils.cc
++++ b/media/gpu/v4l2/v4l2_utils.cc
+@@ -69,9 +69,9 @@ using media_gpu_v4l2::StubPathMap;
+ 
+ inline static constexpr char kLibV4l2Path[] =
+ #if defined(__aarch64__)
+-      "/usr/lib64/libv4l2.so";
++      "/usr/lib/libv4l2.so.0";
+ #else
+-      "/usr/lib/libv4l2.so";
++      "/usr/lib/libv4l2.so.0";
+ #endif
+ 
+ static bool use_libv4l2_ = false;
 -- 
-2.49.0
+2.50.0
 
