@@ -1,4 +1,4 @@
-From 568853fb913878aab91a9fc6a7d8d51305c3987b Mon Sep 17 00:00:00 2001
+From b392c98531b3b300a932a53b9ded653a531b5b25 Mon Sep 17 00:00:00 2001
 From: Kentaro Hayashi <kenhys@gmail.com>
 Date: Tue, 17 Jun 2025 17:30:17 +0900
 Subject: [PATCH] v4l2-gst: Load libv4l2.so.0 instead of libv4l2.so
@@ -13,10 +13,27 @@ Ported from https://github.com/clear-code/meta-browser-hwdecode/blob/try-rzg2l-v
 
 Signed-off-by: Kentaro Hayashi <hayashi@clear-code.com>
 ---
- media/gpu/v4l2/v4l2_device.cc | 4 ++--
- media/gpu/v4l2/v4l2_utils.cc  | 4 ++--
- 2 files changed, 4 insertions(+), 4 deletions(-)
+ media/capture/video/linux/v4l2_capture_device_impl.cc | 4 ++--
+ media/gpu/v4l2/v4l2_device.cc                         | 4 ++--
+ media/gpu/v4l2/v4l2_utils.cc                          | 4 ++--
+ 3 files changed, 6 insertions(+), 6 deletions(-)
 
+diff --git a/media/capture/video/linux/v4l2_capture_device_impl.cc b/media/capture/video/linux/v4l2_capture_device_impl.cc
+index b9fa8efd5b..dd10e883d3 100644
+--- a/media/capture/video/linux/v4l2_capture_device_impl.cc
++++ b/media/capture/video/linux/v4l2_capture_device_impl.cc
+@@ -21,9 +21,9 @@ using media_gpu_v4l2::StubPathMap;
+ 
+ inline static constexpr char kLibV4l2Path[] =
+ #if defined(__aarch64__)
+-      "/usr/lib64/libv4l2.so";
++      "/usr/lib/libv4l2.so.0";
+ #else
+-      "/usr/lib/libv4l2.so";
++      "/usr/lib/libv4l2.so.0";
+ #endif
+ #endif
+ 
 diff --git a/media/gpu/v4l2/v4l2_device.cc b/media/gpu/v4l2/v4l2_device.cc
 index 469c9323e5..75a4fefcf3 100644
 --- a/media/gpu/v4l2/v4l2_device.cc
