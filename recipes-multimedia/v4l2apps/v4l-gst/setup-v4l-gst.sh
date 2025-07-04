@@ -31,7 +31,7 @@ function tweak_device_group()
 
 # tweak for weston user
 tweak_device_group /dev/video-dec video
-tweak_device_group /dev/videc-enc video
+tweak_device_group /dev/video-enc video
 tweak_device_group /dev/image-proc video
 tweak_device_group /dev/jpeg-dec video
 tweak_device_group /dev/jpeg-enc video
