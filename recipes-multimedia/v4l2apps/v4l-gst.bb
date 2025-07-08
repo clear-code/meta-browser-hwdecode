@@ -27,8 +27,6 @@ do_install:append () {
 	install -d ${D}/usr/local/include
 	install -m 0644 ${S}/lib/include/libv4l-gst-bufferpool.h ${D}/usr/local/include
 	install -m 0644 -D ${WORKDIR}/libv4l-gst.conf ${D}/etc/xdg/libv4l-gst.conf
-	install -d ${D}${sysconfdir}/init.d
-	install -m 0755 -D ${WORKDIR}/v4l-gst.sh ${D}${sysconfdir}/init.d/v4l-gst
 	install -d ${D}/${systemd_unitdir}/system
 	install -m 0644 -D ${WORKDIR}/v4l-gst.service ${D}/${systemd_unitdir}/system
 	localbindir=/usr/local/bin
