@@ -36,6 +36,9 @@ tweak_device_group /dev/image-proc video
 tweak_device_group /dev/jpeg-dec video
 tweak_device_group /dev/jpeg-enc video
 
+# for stateful video decoder
+tweak_device_group /dev/video-dec0 video
+
 tweak_device_group /dev/rgnmm video
 tweak_device_group /dev/rgnmmbuf video
 
