@@ -30,7 +30,7 @@ do_install:append () {
 	install -d ${D}/${systemd_unitdir}/system
 	install -m 0644 -D ${WORKDIR}/v4l-gst.service ${D}/${systemd_unitdir}/system
 	install -d ${D}${libexecdir}
-	install -m 0755 -D ${WORKDIR}/setup-v4l-gst.sh ${D}${libexecdir}/setup-v4l-gst.sh
+	install -m 0755 -D ${WORKDIR}/setup-v4l-gst.sh ${D}${libexecdir}/v4l-gst/setup-v4l-gst.sh
 }
 
 FILES:${PN}-dbg += "\
@@ -47,7 +47,7 @@ FILES:${PN}-headers = "${includedir}"
 FILES:${PN} += "\
 	${libdir}/libv4l/plugins/*.so \
 	${systemd_unitdir}/system/v4l-gst.service \
-	${libexecdir}/setup-v4l-gst.sh \
+	${libexecdir}/v4l-gst/setup-v4l-gst.sh \
 "
 
 PACKAGES += "\

@@ -3,7 +3,7 @@ Description=Setup device files for v4l-gst
 
 [Service]
 Type=oneshot
-ExecStart=/usr/libexec/setup-v4l-gst.sh
+ExecStart=/usr/libexec/v4l-gst/setup-v4l-gst.sh
 
 [Install]
 WantedBy=multi-user.target
