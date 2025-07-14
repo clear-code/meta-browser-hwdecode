@@ -1,0 +1,172 @@
+From 066278de78c0e734cf3a75ea52d1e897336e05b6 Mon Sep 17 00:00:00 2001
+From: Kentaro Hayashi <hayashi@clear-code.com>
+Date: Mon, 14 Jul 2025 11:51:10 +0900
+Subject: [PATCH] Use V4L2 ioctl wrapper when it is available
+
+It fixes the following error:
+
+  [1040:1127:0711/125412.171663:ERROR:v4l2_stateful_video_decoder.cc(1196)]
+  Failed querying caps: Inappropriate ioctl for device (25)
+
+Upstream-Status: Pending
+Signed-off-by: Kentaro Hayashi <hayashi@clear-code.com>
+---
+ media/gpu/v4l2/v4l2_stateful_video_decoder.cc | 20 ++++++++++---------
+ media/gpu/v4l2/v4l2_utils.cc                  | 10 +++++++++-
+ media/gpu/v4l2/v4l2_utils.h                   |  3 +++
+ 3 files changed, 23 insertions(+), 10 deletions(-)
+
+diff --git a/media/gpu/v4l2/v4l2_stateful_video_decoder.cc b/media/gpu/v4l2/v4l2_stateful_video_decoder.cc
+index e5069a3acf..b79962c447 100644
+--- a/media/gpu/v4l2/v4l2_stateful_video_decoder.cc
++++ b/media/gpu/v4l2/v4l2_stateful_video_decoder.cc
+@@ -36,9 +36,11 @@ namespace {
+ // Numerical value of ioctl() OK return value;
+ constexpr int kIoctlOk = 0;
+ 
++#if 0
+ int HandledIoctl(int fd, int request, void* arg) {
+   return HANDLE_EINTR(ioctl(fd, request, arg));
+ }
++#endif
+ 
+ void* Mmap(int fd,
+            void* addr,
+@@ -93,7 +95,7 @@ void WaitOnceForEvents(int device_fd,
+       // Dequeue the event otherwise it'll be stuck in the driver forever.
+       struct v4l2_event event;
+       memset(&event, 0, sizeof(event));  // Must do: v4l2_event has a union.
+-      if (HandledIoctl(device_fd, VIDIOC_DQEVENT, &event) != kIoctlOk) {
++      if (media::HandledIoctl(device_fd, VIDIOC_DQEVENT, &event) != kIoctlOk) {
+         PLOG(ERROR) << "Failed dequeing an event";
+         return;
+       }
+@@ -323,7 +325,7 @@ void V4L2StatefulVideoDecoder::Initialize(const VideoDecoderConfig& config,
+     }
+ 
+     struct v4l2_capability caps = {};
+-    if (HandledIoctl(device_fd_.get(), VIDIOC_QUERYCAP, &caps) != kIoctlOk) {
++    if (media::HandledIoctl(device_fd_.get(), VIDIOC_QUERYCAP, &caps) != kIoctlOk) {
+       PLOG(ERROR) << "Failed querying caps";
+       std::move(init_cb).Run(DecoderStatus::Codes::kFailedToCreateDecoder);
+       return;
+@@ -365,7 +367,7 @@ void V4L2StatefulVideoDecoder::Initialize(const VideoDecoderConfig& config,
+   }
+ 
+   framerate_control_ = std::make_unique<V4L2FrameRateControl>(
+-      base::BindRepeating(&HandledIoctl, device_fd_.get()),
++      base::BindRepeating(&media::HandledIoctl, device_fd_.get()),
+       base::SequencedTaskRunner::GetCurrentDefault());
+ 
+   // At this point we initialize the |OUTPUT_queue_| only, following
+@@ -375,7 +377,7 @@ void V4L2StatefulVideoDecoder::Initialize(const VideoDecoderConfig& config,
+   // let us know that moment via a V4L2_EVENT_SOURCE_CHANGE.
+   // [1] https://www.kernel.org/doc/html/v5.15/userspace-api/media/v4l/dev-decoder.html#initialization
+   OUTPUT_queue_ = base::WrapRefCounted(new V4L2Queue(
+-      base::BindRepeating(&HandledIoctl, device_fd_.get()),
++      base::BindRepeating(&media::HandledIoctl, device_fd_.get()),
+       /*schedule_poll_cb=*/base::DoNothing(),
+       /*mmap_cb=*/base::BindRepeating(&Mmap, device_fd_.get()),
+       AllocateSecureBufferAsCallback(), V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE,
+@@ -420,7 +422,7 @@ void V4L2StatefulVideoDecoder::Initialize(const VideoDecoderConfig& config,
+   // Subscribe to the resolution change event. This is needed for resolution
+   // changes mid stream but also to initialize the |CAPTURE_queue|.
+   struct v4l2_event_subscription sub = {.type = V4L2_EVENT_SOURCE_CHANGE};
+-  if (HandledIoctl(device_fd_.get(), VIDIOC_SUBSCRIBE_EVENT, &sub) !=
++  if (media::HandledIoctl(device_fd_.get(), VIDIOC_SUBSCRIBE_EVENT, &sub) !=
+       kIoctlOk) {
+     PLOG(ERROR) << "Failed to subscribe to V4L2_EVENT_SOURCE_CHANGE";
+     std::move(init_cb).Run(DecoderStatus::Codes::kFailedToCreateDecoder);
+@@ -679,7 +681,7 @@ bool V4L2StatefulVideoDecoder::InitializeCAPTUREQueue() {
+   DCHECK(IsInitialized()) << "V4L2StatefulVideoDecoder must be Initialize()d";
+ 
+   CAPTURE_queue_ = base::WrapRefCounted(new V4L2Queue(
+-      base::BindRepeating(&HandledIoctl, device_fd_.get()),
++      base::BindRepeating(&media::HandledIoctl, device_fd_.get()),
+       /*schedule_poll_cb=*/base::DoNothing(),
+       /*mmap_cb=*/base::BindRepeating(&Mmap, device_fd_.get()),
+       AllocateSecureBufferAsCallback(), V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE,
+@@ -794,7 +796,7 @@ V4L2StatefulVideoDecoder::EnumeratePixelLayoutCandidates(
+   DCHECK(CAPTURE_queue_) << "|CAPTURE_queue_| must be created at this point";
+ 
+   const auto v4l2_pix_fmts = EnumerateSupportedPixFmts(
+-      base::BindRepeating(&HandledIoctl, device_fd_.get()),
++      base::BindRepeating(&media::HandledIoctl, device_fd_.get()),
+       V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE);
+ 
+   std::vector<ImageProcessor::PixelLayoutCandidate> candidates;
+@@ -834,7 +836,7 @@ size_t V4L2StatefulVideoDecoder::GetNumberOfReferenceFrames() {
+ 
+   struct v4l2_ext_control ctrl = {.id = V4L2_CID_MIN_BUFFERS_FOR_CAPTURE};
+   struct v4l2_ext_controls ext_ctrls = {.count = 1, .controls = &ctrl};
+-  if (HandledIoctl(device_fd_.get(), VIDIOC_G_EXT_CTRLS, &ext_ctrls) ==
++  if (media::HandledIoctl(device_fd_.get(), VIDIOC_G_EXT_CTRLS, &ext_ctrls) ==
+       kIoctlOk) {
+     num_codec_reference_frames = std::max(
+         base::checked_cast<size_t>(ctrl.value), num_codec_reference_frames);
+@@ -1192,7 +1194,7 @@ int V4L2StatefulVideoDecoder::GetMaxNumDecoderInstances() {
+     return std::numeric_limits<int>::max();
+   }
+   struct v4l2_capability caps = {};
+-  if (HandledIoctl(device_fd.get(), VIDIOC_QUERYCAP, &caps) != kIoctlOk) {
++  if (media::HandledIoctl(device_fd.get(), VIDIOC_QUERYCAP, &caps) != kIoctlOk) {
+     PLOG(ERROR) << "Failed querying caps";
+     return std::numeric_limits<int>::max();
+   }
+diff --git a/media/gpu/v4l2/v4l2_utils.cc b/media/gpu/v4l2/v4l2_utils.cc
+index 084f0d6717..4507ab46dc 100644
+--- a/media/gpu/v4l2/v4l2_utils.cc
++++ b/media/gpu/v4l2/v4l2_utils.cc
+@@ -77,11 +77,13 @@ inline static constexpr char kLibV4l2Path[] =
+ static bool use_libv4l2_ = false;
+ 
+ namespace {
++#if 0 // use media:: namespace to export HandledIoctl
+ int HandledIoctl(int fd, int request, void* arg) {
+   if (use_libv4l2_)
+     return HANDLE_EINTR(v4l2_ioctl(fd, request, arg));
+   return HANDLE_EINTR(ioctl(fd, request, arg));
+ }
++#endif
+ 
+ std::string GetDriverName(const media::IoctlAsCallback& ioctl_cb) {
+   struct v4l2_capability caps;
+@@ -97,6 +99,12 @@ std::string GetDriverName(const media::IoctlAsCallback& ioctl_cb) {
+ }  // namespace
+ namespace media {
+ 
++int HandledIoctl(int fd, int request, void* arg) {
++  if (use_libv4l2_)
++    return HANDLE_EINTR(v4l2_ioctl(fd, request, arg));
++  return HANDLE_EINTR(ioctl(fd, request, arg));
++}
++
+ void RecordMediaIoctlUMA(MediaIoctlRequests function) {
+   base::UmaHistogramEnumeration("Media.V4l2VideoDecoder.MediaIoctlError",
+                                 function);
+@@ -697,7 +705,7 @@ std::optional<SupportedVideoDecoderConfigs> GetSupportedV4L2DecoderConfigs() {
+ }
+ 
+ bool IsV4L2DecoderStateful() {
+-#if 0
++#if 1
+   constexpr char kVideoDeviceDriverPath[] = "/dev/video-dec0";
+   base::ScopedFD device_fd(HANDLE_EINTR(
+       open(kVideoDeviceDriverPath, O_RDWR | O_NONBLOCK | O_CLOEXEC)));
+diff --git a/media/gpu/v4l2/v4l2_utils.h b/media/gpu/v4l2/v4l2_utils.h
+index 6a0be7c5c5..777013e7c5 100644
+--- a/media/gpu/v4l2/v4l2_utils.h
++++ b/media/gpu/v4l2/v4l2_utils.h
+@@ -106,6 +106,9 @@ enum class VidiocIoctlRequests {
+   kMaxValue = kVidiocSExtCtrls,
+ };
+ 
++// Call ioctl wrapper (v4l2_ioctl) when it is available
++int HandledIoctl(int fd, int request, void* arg);
++
+ // Records Media.V4L2VideoDecoder.MediaIoctlError UMA when errors happen with
+ // media controller API ioctl requests.
+ void RecordMediaIoctlUMA(MediaIoctlRequests function);
+-- 
+2.50.0
+
