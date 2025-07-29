@@ -12,7 +12,7 @@ SRC_URI = "git://github.com/clear-code/v4l-gst.git;protocol=https;branch=main \
 	   file://setup-v4l-gst.sh \
           "
 
-SRCREV = "979f9bc98825cfdca65fac59ec2280fc4077b05d"
+SRCREV = "909dfac93ec3863f0939290c719cdc320317e282"
 
 S = "${WORKDIR}/git"
 
