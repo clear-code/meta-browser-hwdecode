@@ -1,6 +1,6 @@
 SECTION = "libs"
-LICENSE = "LGPL-2.1"
-LIC_FILES_CHKSUM = "file:///${COMMON_LICENSE_DIR}/LGPL-2.1-only;md5=1a6d268fd218675ffea8be556788b780"
+LICENSE = "LGPL-2.1-or-later"
+LIC_FILES_CHKSUM = "file:///${COMMON_LICENSE_DIR}/LGPL-2.1-or-later;md5=2a4f4fd2128ea2f65047ee63fbca9f68"
 
 SECTION = "libs"
 
