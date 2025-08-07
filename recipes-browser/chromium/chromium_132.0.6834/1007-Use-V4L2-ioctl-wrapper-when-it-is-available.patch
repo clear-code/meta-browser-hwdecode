@@ -1,4 +1,4 @@
-From 9e5813b4e0930c2f7f1e6e6df3dd42585d5507d5 Mon Sep 17 00:00:00 2001
+From 1c6b58b48656a5b34a61a6a1fc62d7c6d88276f5 Mon Sep 17 00:00:00 2001
 From: Kentaro Hayashi <hayashi@clear-code.com>
 Date: Mon, 14 Jul 2025 11:51:10 +0900
 Subject: [PATCH] Use V4L2 ioctl wrapper when it is available
@@ -15,10 +15,11 @@ Signed-off-by: Takuro Ashie <ashie@clear-code.com>
  media/base/media_switches.cc                  |   5 +
  media/base/media_switches.h                   |   1 +
  media/gpu/chromeos/video_decoder_pipeline.cc  |   2 +-
- media/gpu/v4l2/v4l2_stateful_video_decoder.cc |  45 +++----
- media/gpu/v4l2/v4l2_utils.cc                  | 124 +++++++++---------
- media/gpu/v4l2/v4l2_utils.h                   |  17 +++
- 6 files changed, 106 insertions(+), 88 deletions(-)
+ media/gpu/v4l2/v4l2_queue.cc                  |   2 +-
+ media/gpu/v4l2/v4l2_stateful_video_decoder.cc |  45 +++---
+ media/gpu/v4l2/v4l2_utils.cc                  | 132 ++++++++++--------
+ media/gpu/v4l2/v4l2_utils.h                   |  19 +++
+ 7 files changed, 117 insertions(+), 89 deletions(-)
 
 diff --git a/media/base/media_switches.cc b/media/base/media_switches.cc
 index d5695e08eb..7050a1da9f 100644
@@ -61,6 +62,19 @@ index 23d3d7e17c..9e818eb9e7 100644
        create_decoder_function_cb =
            base::BindOnce(&V4L2StatefulVideoDecoder::Create);
      } else {
+diff --git a/media/gpu/v4l2/v4l2_queue.cc b/media/gpu/v4l2/v4l2_queue.cc
+index be01ce3666..c5f8f62c67 100644
+--- a/media/gpu/v4l2/v4l2_queue.cc
++++ b/media/gpu/v4l2/v4l2_queue.cc
+@@ -254,7 +254,7 @@ V4L2Buffer::~V4L2Buffer() {
+   if (v4l2_buffer_.memory == V4L2_MEMORY_MMAP) {
+     for (size_t i = 0; i < plane_mappings_.size(); i++) {
+       if (plane_mappings_[i] != nullptr) {
+-        munmap(plane_mappings_[i], v4l2_buffer_.m.planes[i].length);
++        media::V4L2Munmap(plane_mappings_[i], v4l2_buffer_.m.planes[i].length);
+       }
+     }
+   }
 diff --git a/media/gpu/v4l2/v4l2_stateful_video_decoder.cc b/media/gpu/v4l2/v4l2_stateful_video_decoder.cc
 index e5069a3acf..a2727acb5c 100644
 --- a/media/gpu/v4l2/v4l2_stateful_video_decoder.cc
@@ -201,7 +215,7 @@ index e5069a3acf..a2727acb5c 100644
      return std::numeric_limits<int>::max();
    }
 diff --git a/media/gpu/v4l2/v4l2_utils.cc b/media/gpu/v4l2/v4l2_utils.cc
-index 2b8ca56143..850587281b 100644
+index 2b8ca56143..075effedd9 100644
 --- a/media/gpu/v4l2/v4l2_utils.cc
 +++ b/media/gpu/v4l2/v4l2_utils.cc
 @@ -68,16 +68,11 @@ using media_gpu_v4l2::kModuleV4l2;
@@ -222,7 +236,7 @@ index 2b8ca56143..850587281b 100644
  std::string GetDriverName(const media::IoctlAsCallback& ioctl_cb) {
    struct v4l2_capability caps;
    memset(&caps, 0, sizeof(caps));
-@@ -92,6 +87,58 @@ std::string GetDriverName(const media::IoctlAsCallback& ioctl_cb) {
+@@ -92,6 +87,66 @@ std::string GetDriverName(const media::IoctlAsCallback& ioctl_cb) {
  }  // namespace
  namespace media {
  
@@ -261,15 +275,23 @@ index 2b8ca56143..850587281b 100644
 +}
 +
 +void* V4L2Mmap(int fd,
-+	       void* addr,
-+	       unsigned int len,
-+	       int prot,
-+	       int flags,
-+	       unsigned int offset)
++               void* addr,
++               unsigned int len,
++               int prot,
++               int flags,
++               unsigned int offset)
 +{
 +  if (use_libv4l2_)
 +    return v4l2_mmap(addr, len, prot, flags, fd, offset);
 +  return mmap(addr, len, prot, flags, fd, offset);
++}
++
++int V4L2Munmap(void* addr,
++               unsigned int len)
++{
++  if (use_libv4l2_)
++    return v4l2_munmap(addr, len);
++  return munmap(addr, len);
 +}
 +
 +int HandledIoctl(int fd, int request, void* arg) {
@@ -281,7 +303,7 @@ index 2b8ca56143..850587281b 100644
  void RecordMediaIoctlUMA(MediaIoctlRequests function) {
    base::UmaHistogramEnumeration("Media.V4l2VideoDecoder.MediaIoctlError",
                                  function);
-@@ -609,58 +656,26 @@ struct timeval TimeDeltaToTimeVal(base::TimeDelta time_delta) {
+@@ -609,58 +664,26 @@ struct timeval TimeDeltaToTimeVal(base::TimeDelta time_delta) {
  std::optional<SupportedVideoDecoderConfigs> GetSupportedV4L2DecoderConfigs() {
    SupportedVideoDecoderConfigs supported_media_configs;
    std::vector<std::string> candidate_paths;
@@ -346,7 +368,7 @@ index 2b8ca56143..850587281b 100644
            &min_coded_size, &max_coded_size);
  
        for (const auto& profile : media_codec_profiles) {
-@@ -675,9 +690,7 @@ std::optional<SupportedVideoDecoderConfigs> GetSupportedV4L2DecoderConfigs() {
+@@ -675,9 +698,7 @@ std::optional<SupportedVideoDecoderConfigs> GetSupportedV4L2DecoderConfigs() {
        }
      }
  
@@ -357,7 +379,7 @@ index 2b8ca56143..850587281b 100644
    }
  
  #if DCHECK_IS_ON()
-@@ -692,18 +705,16 @@ std::optional<SupportedVideoDecoderConfigs> GetSupportedV4L2DecoderConfigs() {
+@@ -692,18 +713,16 @@ std::optional<SupportedVideoDecoderConfigs> GetSupportedV4L2DecoderConfigs() {
  }
  
  bool IsV4L2DecoderStateful() {
@@ -381,7 +403,7 @@ index 2b8ca56143..850587281b 100644
    // V4L2 stateful formats (don't end up with _SLICE or _FRAME) supported.
    constexpr std::array<uint32_t, 4> kSupportedStatefulInputCodecs = {
        V4L2_PIX_FMT_H264,
-@@ -718,14 +729,9 @@ bool IsV4L2DecoderStateful() {
+@@ -718,14 +737,9 @@ bool IsV4L2DecoderStateful() {
                              kSupportedStatefulInputCodecs.begin(),
                              kSupportedStatefulInputCodecs.end()) !=
           v4l2_codecs.end();
@@ -397,10 +419,10 @@ index 2b8ca56143..850587281b 100644
        open(kVideoDeviceDriverPath, O_RDWR | O_NONBLOCK | O_CLOEXEC)));
    if (!device_fd.is_valid()) {
 diff --git a/media/gpu/v4l2/v4l2_utils.h b/media/gpu/v4l2/v4l2_utils.h
-index 6a0be7c5c5..e55fc7a533 100644
+index 6a0be7c5c5..4fc3bd8d32 100644
 --- a/media/gpu/v4l2/v4l2_utils.h
 +++ b/media/gpu/v4l2/v4l2_utils.h
-@@ -106,6 +106,23 @@ enum class VidiocIoctlRequests {
+@@ -106,6 +106,25 @@ enum class VidiocIoctlRequests {
    kMaxValue = kVidiocSExtCtrls,
  };
  
@@ -412,11 +434,13 @@ index 6a0be7c5c5..e55fc7a533 100644
 +
 +// Call mmap wrapper (v4l2_mmap) when it is needed
 +void* V4L2Mmap(int fd,
-+	       void* addr,
-+	       unsigned int len,
-+	       int prot,
-+	       int flags,
-+	       unsigned int offset);
++               void* addr,
++               unsigned int len,
++               int prot,
++               int flags,
++               unsigned int offset);
++int V4L2Munmap(void* addr,
++               unsigned int len);
 +
 +// Call ioctl wrapper (v4l2_ioctl) when it is available
 +int HandledIoctl(int fd, int request, void* arg);
