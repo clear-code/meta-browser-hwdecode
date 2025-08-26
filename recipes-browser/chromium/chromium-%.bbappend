@@ -13,6 +13,7 @@ GN_ARGS:append = " fatal_linker_warnings=false"
 # Need to escape '/' because this value is proccessed by sed with '/' delimiter
 CHROMIUM_EXTRA_ARGS:append = " --dri-render-node-path=\/dev\/dri\/card0 "
 CHROMIUM_EXTRA_ARGS:append = " --enable-features=AcceleratedVideoDecoder,AcceleratedVideoDecodeLinuxGL,AcceleratedVideoDecodeLinuxZeroCopyGL "
+CHROMIUM_EXTRA_ARGS:append = " --disable-background-media-suspend "
 
 FILESEXTRAPATHS:prepend := "${THISDIR}/files:"
 
