@@ -1,0 +1,32 @@
+From 4823f6c669078791df813664f86622d878b3a847 Mon Sep 17 00:00:00 2001
+From: Takuro Ashie <ashie@clear-code.com>
+Date: Mon, 1 Sep 2025 11:28:01 +0900
+Subject: [PATCH] Add work arround to fallback to SW video decoder
+
+Upstream-Status: Inappropriate [rzg2 specific]
+
+Signed-off-by: Takuro Ashie <ashie@clear-code.com>
+---
+ ui/gfx/linux/client_native_pixmap_factory_dmabuf.cc | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/ui/gfx/linux/client_native_pixmap_factory_dmabuf.cc b/ui/gfx/linux/client_native_pixmap_factory_dmabuf.cc
+index c65ab9bd87..2c24a035a1 100644
+--- a/ui/gfx/linux/client_native_pixmap_factory_dmabuf.cc
++++ b/ui/gfx/linux/client_native_pixmap_factory_dmabuf.cc
+@@ -109,10 +109,12 @@ class ClientNativePixmapFactoryDmabuf : public ClientNativePixmapFactory {
+               base::CheckAdd(handle.planes[i].size, handle.planes[i].offset);
+           if (!size_to_map.IsValid<size_t>())
+             return nullptr;
++#if 0
+           if (size_to_map.ValueOrDie<size_t>() >
+               base::checked_cast<size_t>(dma_buf_size)) {
+             return nullptr;
+           }
++#endif
+         }
+         return ClientNativePixmapDmaBuf::ImportFromDmabuf(std::move(handle),
+                                                           size, format);
+-- 
+2.43.0
+
