@@ -1,0 +1,27 @@
+From 97fbe427c7cffb2d4635e5989d65a378414653be Mon Sep 17 00:00:00 2001
+From: Takuro Ashie <ashie@clear-code.com>
+Date: Fri, 5 Sep 2025 16:04:03 +0900
+Subject: [PATCH] Increase MAX_BUFFERS
+
+Chromium requires at least 10 buffers.
+
+Upstream-Status: Pending
+
+Signed-off-by: Takuro Ashie <ashie@clear-code.com>
+---
+ gstvspmfilter.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/gstvspmfilter.c b/gstvspmfilter.c
+index 6ef71fb..8d026fd 100644
+--- a/gstvspmfilter.c
++++ b/gstvspmfilter.c
+@@ -61,7 +61,7 @@ GST_DEBUG_CATEGORY_EXTERN (GST_CAT_PERFORMANCE);
+ 
+ /* number buffers of buffer pool */
+ #define MIN_BUFFERS (5)
+-#define MAX_BUFFERS (5)
++#define MAX_BUFFERS (10)
+ 
+ GType gst_vspm_filter_get_type (void);
+ 
