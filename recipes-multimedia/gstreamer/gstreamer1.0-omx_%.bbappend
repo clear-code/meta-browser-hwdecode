@@ -1,5 +1,5 @@
 SRC_URI:append = " \
-    file://0001-omxvideodec-Try-to-mitigate-freeze-issue-on-flushing.patch \
+    file://0001-omxvideodec-Start-flushing-earlier-to-avoid-unstable.patch \
 "
 
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}/:"
