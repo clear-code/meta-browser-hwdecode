@@ -1,0 +1,77 @@
+From cde8f939e13ec9ded9444ce8292f3b075176925b Mon Sep 17 00:00:00 2001
+From: Takuro Ashie <ashie@clear-code.com>
+Date: Mon, 6 Oct 2025 21:35:28 +0900
+Subject: [PATCH] Enable to use gfx::NativePixmapDmaBuf if available on Wayland
+
+By this change, OzoneImageBacking become available even on platforms
+that don't support GBM (`--in-process-gpu` will be needed on such
+platforms). It's needed for hardware video decode on Wayland.
+
+Upstream-Status: Pending
+
+Signed-off-by: Takuro Ashie <ashie@clear-code.com>
+---
+ ui/ozone/platform/wayland/gpu/wayland_surface_factory.cc | 6 +++++-
+ ui/ozone/platform/wayland/gpu/wayland_surface_factory.h  | 2 +-
+ ui/ozone/platform/wayland/ozone_platform_wayland.cc      | 4 ++--
+ 3 files changed, 8 insertions(+), 4 deletions(-)
+
+diff --git a/ui/ozone/platform/wayland/gpu/wayland_surface_factory.cc b/ui/ozone/platform/wayland/gpu/wayland_surface_factory.cc
+index f753d863c6..369a0b75a1 100644
+--- a/ui/ozone/platform/wayland/gpu/wayland_surface_factory.cc
++++ b/ui/ozone/platform/wayland/gpu/wayland_surface_factory.cc
+@@ -310,11 +310,15 @@ WaylandSurfaceFactory::CreateNativePixmapFromHandle(
+   return nullptr;
+ }
+ 
+-bool WaylandSurfaceFactory::SupportsNativePixmaps() const {
++bool WaylandSurfaceFactory::SupportsNativePixmaps(bool in_process_gpu) const {
+   bool supports_native_pixmaps = false;
+ #if defined(WAYLAND_GBM)
+   supports_native_pixmaps = buffer_manager_->GetGbmDevice() != nullptr;
+ #endif
++  if (!supports_native_pixmaps && in_process_gpu) {
++    supports_native_pixmaps =
++      gl::GLSurfaceEGL::GetGLDisplayEGL()->ext->b_EGL_EXT_image_dma_buf_import;
++  }
+   // Native pixmaps are not supported with swiftshader.
+   if (gl::IsSoftwareGLImplementation(gl::GetGLImplementationParts())) {
+     supports_native_pixmaps = false;
+diff --git a/ui/ozone/platform/wayland/gpu/wayland_surface_factory.h b/ui/ozone/platform/wayland/gpu/wayland_surface_factory.h
+index c3ab19ad0a..78092b5013 100644
+--- a/ui/ozone/platform/wayland/gpu/wayland_surface_factory.h
++++ b/ui/ozone/platform/wayland/gpu/wayland_surface_factory.h
+@@ -64,7 +64,7 @@ class WaylandSurfaceFactory : public SurfaceFactoryOzone {
+   void SetDrmModifiersFilter(
+       std::unique_ptr<DrmModifiersFilter> filter) override;
+ 
+-  bool SupportsNativePixmaps() const;
++  bool SupportsNativePixmaps(bool in_process_gpu) const;
+ 
+   std::vector<gfx::BufferFormat> GetSupportedFormatsForTexturing()
+       const override;
+diff --git a/ui/ozone/platform/wayland/ozone_platform_wayland.cc b/ui/ozone/platform/wayland/ozone_platform_wayland.cc
+index 6060821901..27a7c7ab20 100644
+--- a/ui/ozone/platform/wayland/ozone_platform_wayland.cc
++++ b/ui/ozone/platform/wayland/ozone_platform_wayland.cc
+@@ -440,7 +440,7 @@ class OzonePlatformWayland : public OzonePlatform,
+       if (surface_factory_) {
+         DCHECK(has_initialized_gpu());
+         properties.supports_native_pixmaps =
+-            surface_factory_->SupportsNativePixmaps();
++            surface_factory_->SupportsNativePixmaps(single_process());
+       }
+     } else if (buffer_manager_) {
+       DCHECK(has_initialized_gpu());
+@@ -457,7 +457,7 @@ class OzonePlatformWayland : public OzonePlatform,
+           buffer_manager_->supports_overlays() &&
+           buffer_manager_->supports_viewporter();
+       properties.supports_native_pixmaps =
+-          surface_factory_->SupportsNativePixmaps();
++          surface_factory_->SupportsNativePixmaps(single_process());
+       properties.supports_clip_rect = buffer_manager_->supports_clip_rect();
+       properties.supports_affine_transform =
+           buffer_manager_->supports_affine_transform();
+-- 
+2.43.0
+
