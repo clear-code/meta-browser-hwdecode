@@ -1,0 +1,63 @@
+From e08b028363145ca5ccea3beadb3949ac6b9195fd Mon Sep 17 00:00:00 2001
+From: Takuro Ashie <ashie@clear-code.com>
+Date: Fri, 10 Oct 2025 14:29:35 +0900
+Subject: [PATCH] Fix a dead lock issue on exiting WaylandEventWatcherThread
+
+Upstream-Status: Pending
+
+Signed-off-by: Takuro Ashie <ashie@clear-code.com>
+---
+ ui/events/platform/wayland/wayland_event_watcher.cc      | 4 ++--
+ ui/events/platform/wayland/wayland_event_watcher.h       | 2 +-
+ ui/events/platform/wayland/wayland_event_watcher_glib.cc | 3 ++-
+ 3 files changed, 5 insertions(+), 4 deletions(-)
+
+diff --git a/ui/events/platform/wayland/wayland_event_watcher.cc b/ui/events/platform/wayland/wayland_event_watcher.cc
+index 6b41f5aaae..ff5ba58827 100644
+--- a/ui/events/platform/wayland/wayland_event_watcher.cc
++++ b/ui/events/platform/wayland/wayland_event_watcher.cc
+@@ -224,12 +224,12 @@ void WaylandEventWatcher::RoundTripQueue() {
+   wl_display_roundtrip_queue(display_, event_queue_);
+ }
+ 
+-void WaylandEventWatcher::StopProcessingEvents() {
++void WaylandEventWatcher::StopProcessingEvents(bool sync) {
+   if (!watching_) {
+     return;
+   }
+ 
+-  if (use_threaded_polling_) {
++  if (use_threaded_polling_ && !sync) {
+     watching_thread_task_runner_->PostTask(
+         FROM_HERE,
+         base::BindOnce(&WaylandEventWatcher::StopProcessingEventsInternal,
+diff --git a/ui/events/platform/wayland/wayland_event_watcher.h b/ui/events/platform/wayland/wayland_event_watcher.h
+index 63b55f5ebe..4798e9f433 100644
+--- a/ui/events/platform/wayland/wayland_event_watcher.h
++++ b/ui/events/platform/wayland/wayland_event_watcher.h
+@@ -54,7 +54,7 @@ class WaylandEventWatcher {
+   void StartProcessingEvents();
+ 
+   // Stops polling for events from input devices.
+-  void StopProcessingEvents();
++  void StopProcessingEvents(bool sync = false);
+ 
+   // Calls wl_display_flush.
+   void Flush();
+diff --git a/ui/events/platform/wayland/wayland_event_watcher_glib.cc b/ui/events/platform/wayland/wayland_event_watcher_glib.cc
+index 803b48f892..fc9425e295 100644
+--- a/ui/events/platform/wayland/wayland_event_watcher_glib.cc
++++ b/ui/events/platform/wayland/wayland_event_watcher_glib.cc
+@@ -78,7 +78,8 @@ WaylandEventWatcherGlib::WaylandEventWatcherGlib(wl_display* display,
+     : WaylandEventWatcher(display, event_queue, use_threaded_polling) {}
+ 
+ WaylandEventWatcherGlib::~WaylandEventWatcherGlib() {
+-  StopProcessingEvents();
++  bool sync = true;
++  StopProcessingEvents(sync);
+ }
+ 
+ bool WaylandEventWatcherGlib::StartWatchingFD(int fd) {
+-- 
+2.43.0
+
