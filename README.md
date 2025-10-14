@@ -1,11 +1,11 @@
 Overview
 ========
 
-This layer enables hardware assisted video decoding in Chromium via
-the Chromium V4L2VDA, using the [v4l-gst libv4l plugin](https://github.com/igel-oss/v4l-gst) to connect it to the Renesas H/W video decoder available through
-GStreamer.
+This layer enables hardware assisted video decoding in Chromium via the Chromium
+V4L2VDA, using the [v4l-gst libv4l plugin](https://github.com/igel-oss/v4l-gst)
+to connect it to the Renesas H/W video decoder available through GStreamer.
 
-Currently, only the H264 video codec is supported.
+Currently, only the H.264 & H.265 video codec is supported.
 
 Building
 ========
