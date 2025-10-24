@@ -9,7 +9,7 @@ inherit auto-patch
 PACKAGECONFIG ??= "use-egl ${@bb.utils.contains('COMBINED_FEATURES', 'hwh264dec', 'use-linux-v4l2 proprietary-codecs', '', d)}"
 PACKAGECONFIG[use-linux-v4l2] = "use_v4l2_codec=true use_v4lplugin=true use_linux_v4l2_only=true"
 
-DEPENDS:append = " ${@bb.utils.contains('PACKAGECONFIG', 'use-linux-v4l2', 'v4l-gst', '', d)} "
+RDEPENDS:${PN} += "${@bb.utils.contains('PACKAGECONFIG', 'use-linux-v4l2', 'v4l-gst', '', d)}"
 
 GN_ARGS:append = " fatal_linker_warnings=false"
 
