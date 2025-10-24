@@ -1,0 +1,30 @@
+From 976585d80321fe552ae625d33a6e10d368039123 Mon Sep 17 00:00:00 2001
+From: Takuro Ashie <ashie@clear-code.com>
+Date: Fri, 24 Oct 2025 13:57:00 +0900
+Subject: [PATCH] Disable TessellationPathRenderer feature of Skia on Mali-G
+ series
+
+We get garbase at https://browserbench.org/MotionMark/.
+
+Upstream-Status: Pending
+
+Signed-off-by: Takuro Ashie <ashie@clear-code.com>
+---
+ third_party/skia/src/gpu/ganesh/gl/GrGLCaps.cpp | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/third_party/skia/src/gpu/ganesh/gl/GrGLCaps.cpp b/third_party/skia/src/gpu/ganesh/gl/GrGLCaps.cpp
+index 3b4878f898..b6129b016e 100644
+--- a/third_party/skia/src/gpu/ganesh/gl/GrGLCaps.cpp
++++ b/third_party/skia/src/gpu/ganesh/gl/GrGLCaps.cpp
+@@ -4470,6 +4470,7 @@ void GrGLCaps::applyDriverCorrectnessWorkarounds(const GrGLContextInfo& ctxInfo,
+ 
+     if (ctxInfo.vendor()   == GrGLVendor::kIntel       ||  // IntelIris640 drops draws completely.
+         ctxInfo.webglVendor() == GrGLVendor::kIntel    ||  // Disable if the webgl vendor is Intel
++        ctxInfo.renderer() == GrGLRenderer::kMaliG     ||  // We get garbage on Mali G31 & G52.
+         ctxInfo.renderer() == GrGLRenderer::kMaliT     ||  // Some curves appear flat on GalaxyS6.
+         ctxInfo.renderer() == GrGLRenderer::kAdreno3xx ||
+         ctxInfo.renderer() == GrGLRenderer::kAdreno430 ||
+-- 
+2.43.0
+
