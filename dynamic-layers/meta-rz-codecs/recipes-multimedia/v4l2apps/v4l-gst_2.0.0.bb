@@ -6,8 +6,10 @@ SECTION = "libs"
 
 DEPENDS = "gstreamer1.0 v4l-utils gstreamer1.0-plugins-base"
 
+V4L_GST_CONF_SRC = "${@bb.utils.contains('COMBINED_FEATURES', 'hwh265dec', 'libv4l-gst-h265.conf', 'libv4l-gst.conf', d)}"
+
 SRC_URI = "git://github.com/clear-code/v4l-gst.git;protocol=https;branch=main \
-	   file://libv4l-gst.conf \
+	   file://${V4L_GST_CONF_SRC} \
 	   file://v4l-gst.service \
 	   file://setup-v4l-gst.sh \
           "
@@ -28,7 +30,7 @@ SYSTEMD_SERVICE:${PN} = "v4l-gst.service"
 do_install:append () {
 	install -d ${D}${includedir}
 	install -m 0644 ${S}/lib/include/libv4l-gst-bufferpool.h ${D}${includedir}
-	install -m 0644 -D ${WORKDIR}/libv4l-gst.conf ${D}/etc/xdg/libv4l-gst.conf
+	install -m 0644 -D ${WORKDIR}/${V4L_GST_CONF_SRC} ${D}/etc/xdg/libv4l-gst.conf
 	install -d ${D}/${systemd_unitdir}/system
 	install -m 0644 -D ${WORKDIR}/v4l-gst.service ${D}/${systemd_unitdir}/system
 	install -d ${D}${libexecdir}
