@@ -14,15 +14,13 @@ SRC_URI = "git://github.com/clear-code/v4l-gst.git;protocol=https;branch=main \
 	   file://setup-v4l-gst.sh \
           "
 
-SRCREV = "73989a0e4ef2f4425aab888dc76ac7ce44c92fe6"
+SRCREV = "2cb1e07423cb943036397576769cd2e0b4d2d239"
 
 PV .= "+git"
 
 S = "${WORKDIR}/git"
 
 inherit autotools pkgconfig systemd
-
-EXTRA_OECONF += "--enable-chromium-compatibility"
 
 SYSTEMD_AUTO_ENABLE = "enable"
 SYSTEMD_SERVICE:${PN} = "v4l-gst.service"
