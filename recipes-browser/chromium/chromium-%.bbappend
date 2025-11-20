@@ -15,6 +15,7 @@ GN_ARGS:append = " fatal_linker_warnings=false"
 
 # Need to escape '/' because this value is proccessed by sed with '/' delimiter
 CHROMIUM_EXTRA_ARGS:append:rzg3e-family = " --dri-render-node-path=\/dev\/dri\/card0 "
+CHROMIUM_EXTRA_ARGS:append:rzg2l-family = " --dri-render-node-path=\/dev\/dri\/card0 "
 CHROMIUM_EXTRA_ARGS:append = " --in-process-gpu "
 CHROMIUM_EXTRA_ARGS:append = " \
   ${@bb.utils.contains('PACKAGECONFIG', 'use-linux-v4l2', '--enable-features=AcceleratedVideoDecoder,AcceleratedVideoDecodeLinuxGL,AcceleratedVideoDecodeLinuxZeroCopyGL --disable-background-media-suspend', '', d)} \
