@@ -14,7 +14,7 @@ SRC_URI = "git://github.com/clear-code/v4l-gst.git;protocol=https;branch=main \
 	   file://setup-v4l-gst.sh \
           "
 
-SRCREV = "123d14f012ae9de20b930f6f04f30f3e4054da0f"
+SRCREV = "f71c70c8b38233c2307bc324dd2dae64a555fcff"
 
 PV .= "+git"
 
