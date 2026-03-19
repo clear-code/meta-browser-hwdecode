@@ -75,7 +75,7 @@ index cdf94e4cf7571..708cb63ba9bce 100644
  const char kOzoneOverrideScreenSize[] = "ozone-override-screen-size";
  
 +// Specifies DRI render node path.
-+const char kDriRenderNodePath[] = "dri-render-node-path";
++const char kDriRenderNodePath[] = "render-node-override";
 +
  }  // namespace switches
 diff --git a/ui/ozone/public/ozone_switches.h b/ui/ozone/public/ozone_switches.h
