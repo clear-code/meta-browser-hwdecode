@@ -1,15 +1,15 @@
 # Copyright (C) 2019, Fuzhou Rockchip Electronics Co., Ltd
-# Copyright (C) 2024-2025, ClearCode Inc.
+# Copyright (C) 2024-2026, ClearCode Inc.
 # Released under the MIT license (see COPYING.MIT for the terms)
 
 MAJ_VER = "${@oe.utils.trim_version("${PV}", 3)}"
 PATCHPATH = "${CURDIR}/chromium_${MAJ_VER}"
 inherit auto-patch
 
-PACKAGECONFIG ??= "use-egl ${@bb.utils.contains('COMBINED_FEATURES', 'hwh264dec', 'use-linux-v4l2 proprietary-codecs', '', d)}"
-PACKAGECONFIG[use-linux-v4l2] = "use_v4l2_codec=true use_v4lplugin=true use_linux_v4l2_only=true"
+PACKAGECONFIG ??= "use-egl ${@bb.utils.contains('COMBINED_FEATURES', 'hwh264dec', 'use-v4l2 proprietary-codecs', '', d)}"
+PACKAGECONFIG[use-v4l2] = "use_v4l2_codec=true use_v4lplugin=true"
 
-RDEPENDS:${PN} += "${@bb.utils.contains('PACKAGECONFIG', 'use-linux-v4l2', 'v4l-gst', '', d)}"
+RDEPENDS:${PN} += "${@bb.utils.contains('PACKAGECONFIG', 'use-v4l2', 'v4l-gst', '', d)}"
 
 GN_ARGS:append = " fatal_linker_warnings=false"
 
@@ -17,7 +17,7 @@ GN_ARGS:append = " fatal_linker_warnings=false"
 CHROMIUM_EXTRA_ARGS:append = " --render-node-override=\/dev\/dri\/card0 "
 CHROMIUM_EXTRA_ARGS:append = " --in-process-gpu "
 CHROMIUM_EXTRA_ARGS:append = " \
-  ${@bb.utils.contains('PACKAGECONFIG', 'use-linux-v4l2', '--enable-features=AcceleratedVideoDecoder,AcceleratedVideoDecodeLinuxGL,AcceleratedVideoDecodeLinuxZeroCopyGL --disable-background-media-suspend', '', d)} \
+  ${@bb.utils.contains('PACKAGECONFIG', 'use-v4l2', '--enable-features=AcceleratedVideoDecoder,AcceleratedVideoDecodeLinuxGL,AcceleratedVideoDecodeLinuxZeroCopyGL --disable-background-media-suspend', '', d)} \
 "
 
 FILESEXTRAPATHS:prepend := "${THISDIR}/files:"
