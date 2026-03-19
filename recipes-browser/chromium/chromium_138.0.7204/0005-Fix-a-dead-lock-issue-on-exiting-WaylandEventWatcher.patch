@@ -1,0 +1,71 @@
+From 756c10e3ef9dae2d01928c53f5369c4ee1ff9b37 Mon Sep 17 00:00:00 2001
+From: Takuro Ashie <ashie@clear-code.com>
+Date: Fri, 10 Oct 2025 14:29:35 +0900
+Subject: [PATCH 05/17] Fix a dead lock issue on exiting
+ WaylandEventWatcherThread
+
+Upstream-Status: Pending
+
+Signed-off-by: Takuro Ashie <ashie@clear-code.com>
+---
+ .../platform/wayland/wayland_event_watcher.cc | 19 +++++++++++++------
+ .../platform/wayland/wayland_event_watcher.h  |  2 +-
+ 2 files changed, 14 insertions(+), 7 deletions(-)
+
+diff --git a/ui/events/platform/wayland/wayland_event_watcher.cc b/ui/events/platform/wayland/wayland_event_watcher.cc
+index 9d44d59dcb..0839f55d0c 100644
+--- a/ui/events/platform/wayland/wayland_event_watcher.cc
++++ b/ui/events/platform/wayland/wayland_event_watcher.cc
+@@ -231,16 +231,19 @@ void WaylandEventWatcher::StopProcessingEvents() {
+   }
+ 
+   if (use_threaded_polling_) {
+-    watching_thread_task_runner_->PostTask(
+-        FROM_HERE,
+-        base::BindOnce(&WaylandEventWatcher::StopProcessingEventsInternal,
+-                       base::Unretained(this)));
++    base::WaitableEvent event;
++    auto cb = base::BindOnce(
++        &WaylandEventWatcher::StopProcessingEventsInternal, weak_this_,
++        &event);
++    watching_thread_task_runner_->PostTask(FROM_HERE, std::move(cb));
++    event.Wait();
+   } else {
+-    StopProcessingEventsInternal();
++    StopProcessingEventsInternal(nullptr);
+   }
+ }
+ 
+-void WaylandEventWatcher::StopProcessingEventsInternal() {
++void WaylandEventWatcher::StopProcessingEventsInternal(
++    base::WaitableEvent* event) {
+   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+   // Cancel read before stopping to watch.
+   if (prepared_) {
+@@ -250,6 +253,10 @@ void WaylandEventWatcher::StopProcessingEventsInternal() {
+   StopWatchingFD();
+ 
+   watching_ = false;
++
++  if (event) {
++    event->Signal();
++  }
+ }
+ 
+ void WaylandEventWatcher::Flush() {
+diff --git a/ui/events/platform/wayland/wayland_event_watcher.h b/ui/events/platform/wayland/wayland_event_watcher.h
+index 63b55f5ebe..cc4db5bd41 100644
+--- a/ui/events/platform/wayland/wayland_event_watcher.h
++++ b/ui/events/platform/wayland/wayland_event_watcher.h
+@@ -94,7 +94,7 @@ class WaylandEventWatcher {
+  private:
+   void StartProcessingEventsThread();
+   void StartProcessingEventsInternal();
+-  void StopProcessingEventsInternal();
++  void StopProcessingEventsInternal(base::WaitableEvent* event);
+   void WlDisplayDispatchPendingQueueInternal(base::WaitableEvent* event);
+ 
+   // Checks if |display_| has any error set. If so, |shutdown_cb_| is executed
+-- 
+2.43.0
+
