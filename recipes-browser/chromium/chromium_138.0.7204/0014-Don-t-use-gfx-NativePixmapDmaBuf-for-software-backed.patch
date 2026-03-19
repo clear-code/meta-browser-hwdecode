@@ -1,0 +1,31 @@
+From 8f99fd8ead4d14a48d7e184abeed42bca367fff7 Mon Sep 17 00:00:00 2001
+From: Takuro Ashie <ashie@clear-code.com>
+Date: Wed, 26 Nov 2025 08:33:44 +0900
+Subject: [PATCH 14/15] Don't use gfx::NativePixmapDmaBuf for software backed
+ video frames
+
+Upstream-Status: Pending
+
+Signed-off-by: Takuro Ashie <ashie@clear-code.com>
+---
+ media/video/gpu_memory_buffer_video_frame_pool.cc | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/media/video/gpu_memory_buffer_video_frame_pool.cc b/media/video/gpu_memory_buffer_video_frame_pool.cc
+index 1791a3de0e..6eeefe7cfe 100644
+--- a/media/video/gpu_memory_buffer_video_frame_pool.cc
++++ b/media/video/gpu_memory_buffer_video_frame_pool.cc
+@@ -652,6 +652,10 @@ void GpuMemoryBufferVideoFramePool::PoolImpl::CreateHardwareFrame(
+ #endif
+ 
+   bool passthrough = false;
++#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
++  if (is_software_backed_video_frame)
++    passthrough = true;
++#endif
+ #if BUILDFLAG(IS_MAC)
+   if (!IOSurfaceCanSetColorSpace(video_frame->ColorSpace()))
+     passthrough = true;
+-- 
+2.43.0
+

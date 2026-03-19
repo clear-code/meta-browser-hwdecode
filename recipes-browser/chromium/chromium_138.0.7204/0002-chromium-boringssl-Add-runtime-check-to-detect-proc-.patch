@@ -1,0 +1,121 @@
+From f874bfe4a58768f579a58a06c8f5b5ab9b57cf53 Mon Sep 17 00:00:00 2001
+From: Kentaro Hayashi <hayashi@clear-code.com>
+Date: Fri, 27 Jun 2025 14:12:37 +0900
+Subject: [PATCH 02/15] chromium/boringssl: Add runtime check to detect
+ /proc/cpuinfo Features
+
+Check whether Cryptographic Extesion is available or not in runtime.
+This is just a fallback not to cause illegal instructions on
+board without CE features.
+
+Upstream-Status: Inappropriate [rzg2l specific]
+Signed-off-by: Kentaro Hayashi <hayashi@clear-code.com>
+---
+ third_party/boringssl/src/crypto/internal.h | 56 +++++++++++++++++++--
+ 1 file changed, 51 insertions(+), 5 deletions(-)
+
+diff --git a/third_party/boringssl/src/crypto/internal.h b/third_party/boringssl/src/crypto/internal.h
+index 0cd7260057..ddeb950544 100644
+--- a/third_party/boringssl/src/crypto/internal.h
++++ b/third_party/boringssl/src/crypto/internal.h
+@@ -51,6 +51,12 @@
+ #include <windows.h>
+ #endif
+ 
++// Use getauxval(AT_HWCAP) to detect Features in /proc/cpuinfo
++#if defined(__aarch64__) && defined(__linux__)
++#include <asm/hwcap.h>
++#include <sys/auxv.h>
++#endif
++
+ #if defined(__cplusplus)
+ extern "C" {
+ #endif
+@@ -1348,7 +1354,15 @@ inline int CRYPTO_is_NEON_capable(void) {
+ 
+ inline int CRYPTO_is_ARMv8_AES_capable(void) {
+ #if defined(OPENSSL_STATIC_ARMCAP_AES) || defined(__ARM_FEATURE_AES)
+-  return 1;
++  // Check whether Cryptographic Extesion is available or not in runtime
++  // This is just a fallback not to cause illegal instructions on
++  // board without CE feature.
++  int64_t hwcaps = getauxval(AT_HWCAP);
++  if (hwcaps & HWCAP_AES) {
++    return 1;
++  } else {
++    return 0;
++  }
+ #else
+   return (OPENSSL_get_armcap() & ARMV8_AES) != 0;
+ #endif
+@@ -1356,7 +1370,15 @@ inline int CRYPTO_is_ARMv8_AES_capable(void) {
+ 
+ inline int CRYPTO_is_ARMv8_PMULL_capable(void) {
+ #if defined(OPENSSL_STATIC_ARMCAP_PMULL) || defined(__ARM_FEATURE_AES)
+-  return 1;
++  // Check whether Cryptographic Extesion is available or not in runtime
++  // This is just a fallback not to cause illegal instructions on
++  // board without CE feature.
++  int64_t hwcaps = getauxval(AT_HWCAP);
++  if (hwcaps & HWCAP_PMULL) {
++    return 1;
++  } else {
++    return 0;
++  }
+ #else
+   return (OPENSSL_get_armcap() & ARMV8_PMULL) != 0;
+ #endif
+@@ -1366,7 +1388,15 @@ inline int CRYPTO_is_ARMv8_SHA1_capable(void) {
+   // SHA-1 and SHA-2 (only) share |__ARM_FEATURE_SHA2| but otherwise
+   // are dealt with independently.
+ #if defined(OPENSSL_STATIC_ARMCAP_SHA1) || defined(__ARM_FEATURE_SHA2)
+-  return 1;
++  // Check whether Cryptographic Extesion is available or not in runtime
++  // This is just a fallback not to cause illegal instructions on
++  // board without CE feature.
++  int64_t hwcaps = getauxval(AT_HWCAP);
++  if (hwcaps & HWCAP_SHA2) {
++    return 1;
++  } else {
++    return 0;
++  }
+ #else
+   return (OPENSSL_get_armcap() & ARMV8_SHA1) != 0;
+ #endif
+@@ -1376,7 +1406,15 @@ inline int CRYPTO_is_ARMv8_SHA256_capable(void) {
+   // SHA-1 and SHA-2 (only) share |__ARM_FEATURE_SHA2| but otherwise
+   // are dealt with independently.
+ #if defined(OPENSSL_STATIC_ARMCAP_SHA256) || defined(__ARM_FEATURE_SHA2)
+-  return 1;
++  // Check whether Cryptographic Extesion is available or not in runtime
++  // This is just a fallback not to cause illegal instructions on
++  // board without CE feature.
++  int64_t hwcaps = getauxval(AT_HWCAP);
++  if (hwcaps & HWCAP_SHA2) {
++    return 1;
++  } else {
++    return 0;
++  }
+ #else
+   return (OPENSSL_get_armcap() & ARMV8_SHA256) != 0;
+ #endif
+@@ -1385,7 +1423,15 @@ inline int CRYPTO_is_ARMv8_SHA256_capable(void) {
+ inline int CRYPTO_is_ARMv8_SHA512_capable(void) {
+   // There is no |OPENSSL_STATIC_ARMCAP_SHA512|.
+ #if defined(__ARM_FEATURE_SHA512)
+-  return 1;
++  // Check whether Cryptographic Extesion is available or not in runtime
++  // This is just a fallback not to cause illegal instructions on
++  // board without CE feature.
++  int64_t hwcaps = getauxval(AT_HWCAP);
++  if (hwcaps & HWCAP_SHA512) {
++    return 1;
++  } else {
++    return 0;
++  }
+ #else
+   return (OPENSSL_get_armcap() & ARMV8_SHA512) != 0;
+ #endif
+-- 
+2.43.0
+
