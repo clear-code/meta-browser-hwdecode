@@ -1,7 +1,7 @@
-From a8aa6f4a77727f49f7d2bdeb284782a35758e4e7 Mon Sep 17 00:00:00 2001
+From 1548ba091fe69c8fdccd20d885f4f65831444336 Mon Sep 17 00:00:00 2001
 From: Kentaro Hayashi <hayashi@clear-code.com>
 Date: Tue, 17 Jun 2025 18:47:02 +0900
-Subject: [PATCH 12/15] v4l-gst: correct offset
+Subject: [PATCH 13/16] v4l-gst: correct offset
 
 Upstream-Status: Pending
 Port from

@@ -1,7 +1,7 @@
 From f874bfe4a58768f579a58a06c8f5b5ab9b57cf53 Mon Sep 17 00:00:00 2001
 From: Kentaro Hayashi <hayashi@clear-code.com>
 Date: Fri, 27 Jun 2025 14:12:37 +0900
-Subject: [PATCH 02/15] chromium/boringssl: Add runtime check to detect
+Subject: [PATCH 02/16] chromium/boringssl: Add runtime check to detect
  /proc/cpuinfo Features
 
 Check whether Cryptographic Extesion is available or not in runtime.

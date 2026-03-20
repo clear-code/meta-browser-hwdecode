@@ -1,7 +1,7 @@
-From c55ebff00c2f16bd92714158236d785f22ff05c6 Mon Sep 17 00:00:00 2001
+From a6d4dce9b0191c8181a0ccec60d31fa4f1dfdc6e Mon Sep 17 00:00:00 2001
 From: Damian Hobson-Garcia <dhobsong@igel.co.jp>
 Date: Wed, 21 Mar 2018 13:18:17 +0200
-Subject: [PATCH 08/15] media: gpu: v4l2: Support libv4l2 plugins
+Subject: [PATCH 09/16] media: gpu: v4l2: Support libv4l2 plugins
 
 Depends on custom libv4l2 with mmap & munmap.
 

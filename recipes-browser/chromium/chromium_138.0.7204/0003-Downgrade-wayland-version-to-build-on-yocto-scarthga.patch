@@ -1,7 +1,7 @@
 From 7687e35920e5a4af3c7487c68ede00d99489a814 Mon Sep 17 00:00:00 2001
 From: Takuro Ashie <ashie@clear-code.com>
 Date: Tue, 1 Jul 2025 15:38:25 +0900
-Subject: [PATCH 03/15] Downgrade wayland version to build on yocto scarthgap
+Subject: [PATCH 03/16] Downgrade wayland version to build on yocto scarthgap
 
 It assumes that use with use_system_libwayland=true.
 

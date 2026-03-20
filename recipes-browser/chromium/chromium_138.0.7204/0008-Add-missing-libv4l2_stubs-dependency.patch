@@ -1,0 +1,30 @@
+From c423768f042fa45f59e993d61eb215040ec92760 Mon Sep 17 00:00:00 2001
+From: Takuro Ashie <ashie@clear-code.com>
+Date: Fri, 20 Mar 2026 14:42:23 +0900
+Subject: [PATCH 08/16] Add missing libv4l2_stubs dependency
+
+Upstream-Status: Inappropriate [oe specific]
+
+Signed-off-by: Takuro Ashie <ashie@clear-code.com>
+---
+ media/gpu/v4l2/BUILD.gn | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/media/gpu/v4l2/BUILD.gn b/media/gpu/v4l2/BUILD.gn
+index 0373d1a6d2..6136afe51c 100644
+--- a/media/gpu/v4l2/BUILD.gn
++++ b/media/gpu/v4l2/BUILD.gn
+@@ -136,6 +136,10 @@ source_set("v4l2") {
+       "//media/gpu:video_frame_mapper_common",
+     ]
+   }
++
++  if (use_v4lplugin) {
++    deps += [ "//media/gpu/v4l2:libv4l2_stubs" ]
++  }
+ }
+ 
+ # The v4l2 status functionality is in its own source set so that it can be
+-- 
+2.43.0
+
