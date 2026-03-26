@@ -1,4 +1,4 @@
-From 4ff447fb112dc024518b0522d96f3420eb442792 Mon Sep 17 00:00:00 2001
+From db7d50e1b47a3fe4d7e3bfea0b40bdf4d604917e Mon Sep 17 00:00:00 2001
 From: Takuro Ashie <ashie@clear-code.com>
 Date: Wed, 26 Nov 2025 08:33:44 +0900
 Subject: [PATCH 16/17] Don't use gfx::NativePixmapDmaBuf for software backed

@@ -1,0 +1,76 @@
+From 0584c1f839ea2dd9e5a4f2d8cc62aafa72a9fbbc Mon Sep 17 00:00:00 2001
+From: Takuro Ashie <ashie@clear-code.com>
+Date: Thu, 26 Mar 2026 17:14:22 +0900
+Subject: [PATCH 14/17] v4l2_queue: Correct plane offset
+
+Upstream-Status: Pending
+
+Signed-off-by: Takuro Ashie <ashie@clear-code.com>
+---
+ media/gpu/v4l2/v4l2_queue.cc |  5 ++++-
+ media/gpu/v4l2/v4l2_utils.cc | 11 +++++++++--
+ media/gpu/v4l2/v4l2_utils.h  |  3 +++
+ 3 files changed, 16 insertions(+), 3 deletions(-)
+
+diff --git a/media/gpu/v4l2/v4l2_queue.cc b/media/gpu/v4l2/v4l2_queue.cc
+index c85ad970bd..3a7821955e 100644
+--- a/media/gpu/v4l2/v4l2_queue.cc
++++ b/media/gpu/v4l2/v4l2_queue.cc
+@@ -320,7 +320,10 @@ size_t V4L2Buffer::GetMemoryUsage() const {
+ }
+ 
+ scoped_refptr<FrameResource> V4L2Buffer::CreateFrame() {
+-  auto layout = V4L2FormatToVideoFrameLayout(format_);
++  std::vector<uint64_t> offsets;
++  for (size_t i = 0; i < v4l2_buffer_.length; ++i)
++    offsets.emplace_back(v4l2_buffer_.m.planes[i].data_offset);
++  auto layout = V4L2FormatToVideoFrameLayout(format_, offsets);
+   if (!layout) {
+     VLOGF(1) << "Cannot create frame layout for V4L2 buffers";
+     return nullptr;
+diff --git a/media/gpu/v4l2/v4l2_utils.cc b/media/gpu/v4l2/v4l2_utils.cc
+index 9ea57fd654..8fe1820623 100644
+--- a/media/gpu/v4l2/v4l2_utils.cc
++++ b/media/gpu/v4l2/v4l2_utils.cc
+@@ -256,6 +256,12 @@ size_t GetNumPlanesOfV4L2PixFmt(uint32_t pix_fmt) {
+ 
+ std::optional<VideoFrameLayout> V4L2FormatToVideoFrameLayout(
+     const struct v4l2_format& format) {
++  std::vector<uint64_t> offsets;
++  return V4L2FormatToVideoFrameLayout(format, offsets);
++}
++
++std::optional<VideoFrameLayout> V4L2FormatToVideoFrameLayout(
++  const struct v4l2_format& format, const std::vector<uint64_t>& offsets) {
+   if (!V4L2_TYPE_IS_MULTIPLANAR(format.type)) {
+     VLOGF(1) << "v4l2_buf_type is not multiplanar: " << std::hex << "0x"
+              << format.type;
+@@ -289,8 +295,9 @@ std::optional<VideoFrameLayout> V4L2FormatToVideoFrameLayout(
+   planes.reserve(num_color_planes);
+   for (size_t i = 0; i < num_buffers; ++i) {
+     const v4l2_plane_pix_format& plane_format = pix_mp.plane_fmt[i];
+-    planes.emplace_back(static_cast<int32_t>(plane_format.bytesperline), 0u,
+-                        plane_format.sizeimage);
++    int offset = (offsets.size() == num_buffers) ? offsets[i] : 0;
++    planes.emplace_back(static_cast<int32_t>(plane_format.bytesperline), offset,
++                       plane_format.sizeimage);
+   }
+   // For the case that #color planes > #buffers, it fills stride of color
+   // plane which does not map to buffer.
+diff --git a/media/gpu/v4l2/v4l2_utils.h b/media/gpu/v4l2/v4l2_utils.h
+index a323bd9d6f..a204fc2ed5 100644
+--- a/media/gpu/v4l2/v4l2_utils.h
++++ b/media/gpu/v4l2/v4l2_utils.h
+@@ -138,6 +138,9 @@ size_t GetNumPlanesOfV4L2PixFmt(uint32_t pix_fmt);
+ std::optional<VideoFrameLayout> V4L2FormatToVideoFrameLayout(
+     const struct v4l2_format& format);
+ 
++std::optional<VideoFrameLayout> V4L2FormatToVideoFrameLayout(
++    const struct v4l2_format& format, const std::vector<uint64_t>& offsets);
++
+ // Query the driver to see what scalability modes are supported for the driver.
+ std::vector<SVCScalabilityMode> GetSupportedScalabilityModesForV4L2Codec(
+     const IoctlAsCallback& ioctl_cb,
+-- 
+2.43.0
+

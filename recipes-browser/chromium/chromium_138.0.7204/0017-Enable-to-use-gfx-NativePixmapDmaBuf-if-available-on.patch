@@ -1,4 +1,4 @@
-From 84b55a1aaf026ad82f6f5eae965f873565c92890 Mon Sep 17 00:00:00 2001
+From 5da4f2c56c97c429def6047803bd04378ed70dfb Mon Sep 17 00:00:00 2001
 From: Takuro Ashie <ashie@clear-code.com>
 Date: Mon, 6 Oct 2025 21:35:28 +0900
 Subject: [PATCH 17/17] Enable to use gfx::NativePixmapDmaBuf if available on
