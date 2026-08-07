@@ -3,6 +3,10 @@
 
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}/:"
 
+SRC_URI += " \
+    file://0001-omx-Drop-empty-video-decoder-outputs.patch \
+"
+
 # The upstream FLUSH event handling now wakes the input port on FLUSH_START and
 # restores it on FLUSH_STOP. Apply our older workaround only to sources that
 # still have no sink_event handler for flushing.

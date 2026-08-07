@@ -1,0 +1,109 @@
+From eeced894146567d4b08af96681c4a0a4dd3141a3 Mon Sep 17 00:00:00 2001
+From: Takuro Ashie <ashie@clear-code.com>
+Date: Fri, 7 Aug 2026 16:47:22 +0900
+Subject: [PATCH] omx: Drop empty video decoder outputs
+
+When OMX memory cannot be attached to an acquired output buffer, the
+buffer can reach downstream with no memory. This was observed around
+EOS under heavy load and can leave clients waiting for the final
+decoded frame, causing loop playback to stop.
+
+Drop such empty outputs inside gst-omx before they are pushed
+downstream, while keeping the original OMX buffer release path intact.
+Also treat the corresponding empty buffer-pool reset as a warning
+instead of an internal consistency error.
+
+Upstream-Status: Pending
+
+Signed-off-by: Takuro Ashie <ashie@clear-code.com>
+---
+ omx/gstomxbufferpool.c |  5 ++++-
+ omx/gstomxvideodec.c   | 38 ++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 42 insertions(+), 1 deletion(-)
+
+diff --git a/omx/gstomxbufferpool.c b/omx/gstomxbufferpool.c
+index 7e78f8c..bfbe77c 100644
+--- a/omx/gstomxbufferpool.c
++++ b/omx/gstomxbufferpool.c
+@@ -568,7 +568,10 @@ gst_omx_buffer_pool_reset_buffer (GstBufferPool * bpool, GstBuffer * buffer)
+   guint n;
+ 
+   n = gst_buffer_n_memory (buffer);
+-  if (G_UNLIKELY (n != 1)) {
++  if (G_UNLIKELY (n == 0)) {
++    GST_WARNING_OBJECT (pool,
++        "Released buffer has no memory after dropping an output frame");
++  } else if (G_UNLIKELY (n != 1)) {
+     GST_ERROR_OBJECT (pool, "Released buffer does not have 1 memory... "
+         "(n = %u) something went terribly wrong", n);
+   }
+diff --git a/omx/gstomxvideodec.c b/omx/gstomxvideodec.c
+index b019f9c..f23940b 100644
+--- a/omx/gstomxvideodec.c
++++ b/omx/gstomxvideodec.c
+@@ -2219,6 +2219,35 @@ set_outbuffer_interlace_flags (GstOMXBuffer * buf, GstBuffer * outbuf)
+ }
+ #endif // USE_OMX_TARGET_ZYNQ_USCALE_PLUS
+ 
++static gboolean
++gst_omx_video_dec_drop_empty_output (GstOMXVideoDec * self,
++    GstBuffer ** outbuf, GstVideoCodecFrame ** frame, GstFlowReturn * flow_ret)
++{
++  if (gst_buffer_n_memory (*outbuf) != 0)
++    return FALSE;
++
++  /* If attaching OMX memory to the acquired output buffer failed, pushing the
++   * empty buffer downstream can hide the real decoded frame and break EOS
++   * handling in clients. Drop it and let the OMX buffer be released normally.
++   */
++  if (*frame) {
++    GST_WARNING_OBJECT (self,
++        "Dropping output frame without memory");
++    gst_buffer_unref (*outbuf);
++    *outbuf = NULL;
++    *flow_ret = gst_video_decoder_drop_frame (GST_VIDEO_DECODER (self), *frame);
++    *frame = NULL;
++  } else {
++    GST_WARNING_OBJECT (self,
++        "Dropping output buffer without memory");
++    gst_buffer_unref (*outbuf);
++    *outbuf = NULL;
++    *flow_ret = GST_FLOW_OK;
++  }
++
++  return TRUE;
++}
++
+ static void
+ gst_omx_video_dec_loop (GstOMXVideoDec * self)
+ {
+@@ -2414,6 +2443,10 @@ gst_omx_video_dec_loop (GstOMXVideoDec * self)
+         gst_omx_port_release_buffer (port, buf);
+         goto invalid_buffer;
+       }
++      if (gst_omx_video_dec_drop_empty_output (self, &outbuf, &frame,
++              &flow_ret))
++        goto done;
++
+ #ifdef USE_OMX_TARGET_ZYNQ_USCALE_PLUS
+       set_outbuffer_interlace_flags (buf, outbuf);
+ #endif
+@@ -2468,6 +2501,10 @@ gst_omx_video_dec_loop (GstOMXVideoDec * self)
+         gst_omx_port_release_buffer (port, buf);
+         goto invalid_buffer;
+       }
++      if (gst_omx_video_dec_drop_empty_output (self, &outbuf, &frame,
++              &flow_ret))
++        goto done;
++
+ #ifdef USE_OMX_TARGET_ZYNQ_USCALE_PLUS
+       set_outbuffer_interlace_flags (buf, outbuf);
+ #endif
+@@ -2516,6 +2553,7 @@ gst_omx_video_dec_loop (GstOMXVideoDec * self)
+     frame = NULL;
+   }
+ 
++done:
+   GST_DEBUG_OBJECT (self, "Finished frame: %s", gst_flow_get_name (flow_ret));
+ 
+   if (buf) {
