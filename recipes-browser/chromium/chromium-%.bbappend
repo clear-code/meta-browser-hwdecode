@@ -48,6 +48,13 @@ def chromium_enable_features_arg(d):
     return chromium_feature_arg(d, "CHROMIUM_ENABLE_FEATURES",
                                 "--enable-features")
 
+def chromium_mali_dri_render_node_arg(d):
+    if d.getVar("PREFERRED_PROVIDER_virtual/libgbm") != "mali-library":
+        return ""
+
+    # Need to escape '/' because this value is processed by sed with '/' delimiter.
+    return " --render-node-override=\\/dev\\/dri\\/card0 "
+
 RDEPENDS:${PN} += "${@bb.utils.contains('PACKAGECONFIG', 'use-v4l2', 'v4l-gst', '', d)}"
 
 GN_ARGS:append = " fatal_linker_warnings=false"
@@ -60,8 +67,7 @@ CHROMIUM_ENABLE_FEATURES:append = "${@bb.utils.contains('PACKAGECONFIG', 'use-v4
 CHROMIUM_UPSTREAM_V4L2_ENABLE_FEATURES_ARG = "--enable-features=AcceleratedVideoDecoder,AcceleratedVideoDecodeLinuxGL,AcceleratedVideoDecodeLinuxZeroCopyGL"
 CHROMIUM_EXTRA_ARGS:remove = "${@bb.utils.contains('PACKAGECONFIG', 'use-v4l2-overlay', d.getVar('CHROMIUM_UPSTREAM_V4L2_ENABLE_FEATURES_ARG'), '', d)}"
 
-# Need to escape '/' because this value is proccessed by sed with '/' delimiter
-CHROMIUM_EXTRA_ARGS:append = " --render-node-override=\/dev\/dri\/card0 "
+CHROMIUM_EXTRA_ARGS:append = "${@chromium_mali_dri_render_node_arg(d)}"
 CHROMIUM_EXTRA_ARGS:append = " --in-process-gpu "
 CHROMIUM_EXTRA_ARGS:append = " \
   ${@chromium_enable_features_arg(d)} \
