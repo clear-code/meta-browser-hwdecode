@@ -1,0 +1,177 @@
+From 15a246408063735dd49b08a8e93505806b294f9a Mon Sep 17 00:00:00 2001
+From: Takuro Ashie <ashie@clear-code.com>
+Date: Tue, 11 Aug 2026 18:34:29 +0900
+Subject: [PATCH] backend-drm: keep NV12 overlays under software cursor
+
+RZ/G2L can scan out no-scale NV12 dmabuf video on an overlay plane,
+but Weston normally rejects plane assignment when the view overlaps the
+renderer region. When the only renderer overlap above an NV12 dmabuf
+view is the pointer cursor, keep the NV12 view eligible for plane
+assignment so video playback does not fall back to GPU composition
+while the cursor is over the video.
+
+The workaround is limited to NV12 dmabuf views and only applies when a
+hardware cursor plane is available. Other renderer occlusion still
+forces the view to the renderer.
+
+Upstream-Status: Inappropriate [RZ/G2L-specific DRM plane workaround]
+---
+ libweston/backend-drm/state-propose.c | 121 +++++++++++++++++++++++++-
+ 1 file changed, 118 insertions(+), 3 deletions(-)
+
+diff --git a/libweston/backend-drm/state-propose.c b/libweston/backend-drm/state-propose.c
+index 2b42e3d..faa4ad7 100644
+--- a/libweston/backend-drm/state-propose.c
++++ b/libweston/backend-drm/state-propose.c
+@@ -29,6 +29,8 @@
+ 
+ #include "config.h"
+ 
++#include <string.h>
++
+ #include <xf86drm.h>
+ #include <xf86drmMode.h>
+ 
+@@ -36,6 +38,8 @@
+ #include <libweston/backend-drm.h>
+ #include <libweston/pixel-formats.h>
+ 
++#include "shared/weston-drm-fourcc.h"
++
+ #include "drm-internal.h"
+ 
+ #include "color.h"
+@@ -43,6 +47,109 @@
+ #include "presentation-time-server-protocol.h"
+ #include "linux-dmabuf-unstable-v1-server-protocol.h"
+ 
++static bool
++drm_view_has_nv12_dmabuf(struct weston_view *ev)
++{
++	struct weston_buffer *buffer;
++	struct linux_dmabuf_buffer *dmabuf;
++
++	if (!ev || !ev->surface)
++		return false;
++
++	buffer = ev->surface->buffer_ref.buffer;
++	if (!buffer || buffer->type != WESTON_BUFFER_DMABUF || !buffer->dmabuf)
++		return false;
++
++	dmabuf = buffer->dmabuf;
++
++	return dmabuf->attributes.format == DRM_FORMAT_NV12;
++}
++
++static bool
++drm_view_is_pointer_cursor(struct weston_view *ev)
++{
++	const char *role;
++
++	if (!ev || !ev->surface)
++		return false;
++
++	role = weston_surface_get_role(ev->surface);
++
++	return role && strcmp(role, "wl_pointer-cursor") == 0;
++}
++
++static bool
++drm_nv12_overlap_is_cursor_only(struct weston_output *output_base,
++				struct weston_paint_node *blocked_pnode,
++				const pixman_region32_t *blocked_overlap)
++{
++	struct weston_paint_node *other_pnode;
++	pixman_region32_t cursor_overlap;
++	bool has_cursor_overlap = false;
++	bool cursor_only = true;
++
++	pixman_region32_init(&cursor_overlap);
++
++	wl_list_for_each(other_pnode, &output_base->paint_node_z_order_list,
++			 z_order_link) {
++		struct weston_view *other = other_pnode->view;
++		pixman_region32_t other_clipped;
++		pixman_region32_t overlap;
++
++		if (other_pnode == blocked_pnode)
++			break;
++
++		pixman_region32_init(&other_clipped);
++		pixman_region32_intersect(&other_clipped,
++					  &other->transform.boundingbox,
++					  &output_base->region);
++
++		pixman_region32_init(&overlap);
++		pixman_region32_intersect(&overlap, &other_clipped,
++					  blocked_overlap);
++
++		if (pixman_region32_not_empty(&overlap)) {
++			if (drm_view_is_pointer_cursor(other)) {
++				has_cursor_overlap = true;
++				pixman_region32_union(&cursor_overlap,
++						      &cursor_overlap,
++						      &overlap);
++			} else {
++				cursor_only = false;
++			}
++		}
++
++		pixman_region32_fini(&overlap);
++		pixman_region32_fini(&other_clipped);
++	}
++
++	if (cursor_only && has_cursor_overlap)
++		cursor_only = pixman_region32_equal(&cursor_overlap,
++						    blocked_overlap);
++	else
++		cursor_only = false;
++
++	pixman_region32_fini(&cursor_overlap);
++
++	return cursor_only;
++}
++
++static bool
++drm_nv12_can_ignore_renderer_occlusion(struct drm_output *output,
++				       struct weston_paint_node *pnode,
++				       const pixman_region32_t *overlap)
++{
++	/* RZ/G2L can scan out no-scale NV12 on an overlay plane. Do not lose
++	 * that path just because a software cursor overlaps the video. */
++	if (!output->cursor_plane || output->device->cursors_are_broken)
++		return false;
++
++	if (!drm_view_has_nv12_dmabuf(pnode->view))
++		return false;
++
++	return drm_nv12_overlap_is_cursor_only(&output->base, pnode, overlap);
++}
++
+ enum drm_output_propose_state_mode {
+ 	DRM_OUTPUT_PROPOSE_STATE_MIXED, /**< mix renderer & planes */
+ 	DRM_OUTPUT_PROPOSE_STATE_RENDERER_ONLY, /**< only assign to renderer & cursor */
+@@ -776,9 +883,17 @@ drm_output_propose_state(struct weston_output *output_base,
+ 		pixman_region32_intersect(&surface_overlap, &renderer_region,
+ 					  &clipped_view);
+ 		if (pixman_region32_not_empty(&surface_overlap)) {
+-			drm_debug(b, "\t\t\t\t[view] not assigning view %p to plane "
+-			             "(occluded by renderer views)\n", ev);
+-			force_renderer = true;
++			if (drm_nv12_can_ignore_renderer_occlusion(output,
++								   pnode,
++								   &surface_overlap)) {
++				drm_debug(b, "\t\t\t\t[view] ignoring cursor-only "
++					     "renderer occlusion for NV12 view %p\n",
++					  ev);
++			} else {
++				drm_debug(b, "\t\t\t\t[view] not assigning view %p to plane "
++				             "(occluded by renderer views)\n", ev);
++				force_renderer = true;
++			}
+ 		}
+ 		pixman_region32_fini(&surface_overlap);
+ 
+-- 
+2.43.0
+

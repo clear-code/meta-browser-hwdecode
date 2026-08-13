@@ -1,7 +1,7 @@
-From 2b0b4f13b3bd2ebbdfa45c56fcc1831f0b4f73aa Mon Sep 17 00:00:00 2001
+From 9280222b6d25792a45bae0c0917ff976fc39842f Mon Sep 17 00:00:00 2001
 From: Kentaro Hayashi <kenhys@gmail.com>
 Date: Tue, 17 Jun 2025 17:30:17 +0900
-Subject: [PATCH 12/19] v4l2-gst: Load libv4l2.so.0 instead of libv4l2.so
+Subject: [PATCH 12/20] v4l2-gst: Load libv4l2.so.0 instead of libv4l2.so
 
 SO version should be added to keep binary compatibility, and to work
 without development package.

@@ -58,6 +58,37 @@ $ MACHINE=<your-machine> bitbake core-image-weston
 The layer automatically extends the vendor BSP through dynamic layers when the
 corresponding RZ/G layers are present.
 
+## Additional build configuration
+
+### `use-v4l2-overlay`
+
+To additionally enable the experimental V4L2 no-scale hardware overlay path,
+add the following to your `conf/local.conf`:
+
+```conf
+PACKAGECONFIG:append:pn-chromium-ozone-wayland = " use-v4l2-overlay"
+```
+
+The `use-v4l2-overlay` option is intended for RZ/G Wayland/Weston systems where
+decoded NV12 dmabufs can be promoted to a KMS plane without scaling or cropping.
+It is kept separate from `use-v4l2` because it can affect composition behavior,
+such as drawing video above overlapping HTML controls. Enabling
+`use-v4l2-overlay` also enables `use-v4l2`.
+
+### Disabling Chromium managed policy
+
+By default, this layer installs a Chromium managed policy file that suppresses
+startup dialogs commonly undesirable in embedded environments, including the
+command-line flag security warning shown when the `--no-sandbox` is used and the
+browser sign-in prompt.
+
+To restore the default Chromium behavior, add the following to your
+`conf/local.conf`:
+
+```conf
+RDEPENDS:packagegroup-rz-browser:remove = "chromiumpolicy"
+```
+
 # Running
 
 Build and boot the generated image as usual.
@@ -76,18 +107,6 @@ need the `--no-sandbox` option:
 
 ```console
 # chromium --no-sandbox
-```
-
-By default, this layer installs a Chromium managed policy file that suppresses
-startup dialogs commonly undesirable in embedded environments, including the
-command-line flag security warning shown when the `--no-sandbox` is used and the
-browser sign-in prompt.
-
-To restore the default Chromium behavior, add the following to your
-`conf/local.conf`:
-
-```conf
-RDEPENDS:packagegroup-rz-browser:remove = "chromiumpolicy"
 ```
 
 # License

@@ -1,7 +1,7 @@
-From 756c10e3ef9dae2d01928c53f5369c4ee1ff9b37 Mon Sep 17 00:00:00 2001
+From 4329a5f9ca1e2faa5410427fc5569d7463a3f57d Mon Sep 17 00:00:00 2001
 From: Takuro Ashie <ashie@clear-code.com>
 Date: Fri, 10 Oct 2025 14:29:35 +0900
-Subject: [PATCH 05/19] Fix a dead lock issue on exiting
+Subject: [PATCH 05/20] Fix a dead lock issue on exiting
  WaylandEventWatcherThread
 
 Upstream-Status: Pending

@@ -1,7 +1,7 @@
-From 378935d15eafdb4470840da117a58529c48b15ca Mon Sep 17 00:00:00 2001
+From 9d787598b14eb92e687bbffd3327c34b5f5b3cd0 Mon Sep 17 00:00:00 2001
 From: Takuro Ashie <ashie@clear-code.com>
 Date: Mon, 6 Oct 2025 21:35:28 +0900
-Subject: [PATCH 17/19] Enable to use gfx::NativePixmapDmaBuf if available on
+Subject: [PATCH 17/20] Enable to use gfx::NativePixmapDmaBuf if available on
  Wayland
 
 By this change, OzoneImageBacking become available even on platforms

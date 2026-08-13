@@ -1,7 +1,7 @@
-From 03d2a4e9b8dc8c49a6be70984e6d8f26d42b62a3 Mon Sep 17 00:00:00 2001
+From fc42e5326f3dfc5b2308f81f17e8fbed1446c710 Mon Sep 17 00:00:00 2001
 From: Kentaro Hayashi <kenhys@gmail.com>
 Date: Tue, 17 Jun 2025 17:12:15 +0900
-Subject: [PATCH 13/19] v4l-gst: re-read format for initizing a bytesperline.
+Subject: [PATCH 13/20] v4l-gst: re-read format for initizing a bytesperline.
 
 Upstream-Status: Pending
 Ported from
