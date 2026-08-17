@@ -1,0 +1,654 @@
+From dab49e5d5d9c8d3bd7a90187208a8ceec7fec2b3 Mon Sep 17 00:00:00 2001
+From: Takuro Ashie <ashie@clear-code.com>
+Date: Fri, 14 Aug 2026 13:19:10 +0900
+Subject: [PATCH 21/21] ozone/wayland: add Panfrost NV12 no-scale overlay fixes
+
+Keep the existing V4L2NoScaleOverlay path split from Panfrost-specific
+stability fixes. Limit forced Viz promotion to no-scale/no-crop NV12,
+allow Panfrost GBM imports of decoder dmabufs, and tighten Wayland
+attach handling for NV12 overlay buffers.
+
+Gate the Panfrost-specific behavior behind the V4L2NoScaleOverlay field
+trial parameter panfrost_workarounds so Mali DDK can keep using the
+base V4L2NoScaleOverlay path without the extra promotion and surface
+lifetime changes.
+
+Use with --enable-features=V4L2NoScaleOverlay:panfrost_workarounds/true
+on affected Panfrost configurations.
+
+Upstream-Status: Inappropriate [RZ/G2L Panfrost/Weston NV12 overlay workaround]
+---
+ .../display/overlay_strategy_single_on_top.cc | 32 +++++++++++++++++
+ .../display/overlay_strategy_underlay.cc      | 35 +++++++++++++++++++
+ .../skia_output_device_buffer_queue.cc        | 19 +++++++---
+ .../chromeos/mailbox_video_frame_converter.cc | 11 ++++--
+ media/gpu/v4l2/BUILD.gn                       |  1 +
+ .../legacy/v4l2_video_decode_accelerator.cc   | 11 ++++++
+ media/gpu/v4l2/v4l2_queue.cc                  | 14 +++++++-
+ ui/base/ui_base_features.cc                   |  8 +++++
+ ui/base/ui_base_features.h                    |  2 ++
+ ui/gfx/linux/gbm_wrapper.cc                   | 17 +++++++--
+ .../wayland/gpu/wayland_overlay_manager.cc    | 21 ++++++++++-
+ .../wayland/gpu/wayland_surface_factory.cc    | 33 ++++++++++++++---
+ .../wayland/host/wayland_frame_manager.cc     | 19 +++++++++-
+ .../platform/wayland/host/wayland_surface.cc  |  5 +--
+ .../platform/wayland/host/wayland_surface.h   |  3 +-
+ 15 files changed, 213 insertions(+), 18 deletions(-)
+
+diff --git a/components/viz/service/display/overlay_strategy_single_on_top.cc b/components/viz/service/display/overlay_strategy_single_on_top.cc
+index ae9477c6ef..7586b4581e 100644
+--- a/components/viz/service/display/overlay_strategy_single_on_top.cc
++++ b/components/viz/service/display/overlay_strategy_single_on_top.cc
+@@ -4,15 +4,18 @@
+ 
+ #include "components/viz/service/display/overlay_strategy_single_on_top.h"
+ 
++#include <cmath>
+ #include <vector>
+ 
+ #include "base/check_op.h"
++#include "base/feature_list.h"
+ #include "components/viz/common/display/overlay_strategy.h"
+ #include "components/viz/common/quads/draw_quad.h"
+ #include "components/viz/common/quads/texture_draw_quad.h"
+ #include "components/viz/service/display/overlay_candidate.h"
+ #include "components/viz/service/display/overlay_candidate_factory.h"
+ #include "components/viz/service/display/overlay_proposed_candidate.h"
++#include "ui/base/ui_base_features.h"
+ #include "ui/gfx/buffer_types.h"
+ #include "ui/gfx/geometry/rect_conversions.h"
+ 
+@@ -21,6 +24,29 @@ namespace {
+ 
+ using OverlayProposedCandidateIndex =
+     std::vector<OverlayProposedCandidate>::size_type;
++constexpr float kV4L2NoScaleOverlayEpsilon = 0.01f;
++
++bool IsV4L2NoScaleOverlayCandidate(const OverlayCandidate& candidate) {
++  return candidate.format.is_multi_plane() &&
++         candidate.format.plane_config() ==
++             SharedImageFormat::PlaneConfig::kY_UV &&
++         candidate.format.subsampling() ==
++             SharedImageFormat::Subsampling::k420 &&
++         candidate.format.channel_format() ==
++             SharedImageFormat::ChannelFormat::k8 &&
++         std::abs(candidate.uv_rect.x()) <= kV4L2NoScaleOverlayEpsilon &&
++         std::abs(candidate.uv_rect.y()) <= kV4L2NoScaleOverlayEpsilon &&
++         std::abs(candidate.uv_rect.width() - 1.f) <=
++             kV4L2NoScaleOverlayEpsilon &&
++         std::abs(candidate.uv_rect.height() - 1.f) <=
++             kV4L2NoScaleOverlayEpsilon &&
++         std::abs(candidate.display_rect.width() -
++                  candidate.resource_size_in_pixels.width()) <=
++             kV4L2NoScaleOverlayEpsilon &&
++         std::abs(candidate.display_rect.height() -
++                  candidate.resource_size_in_pixels.height()) <=
++             kV4L2NoScaleOverlayEpsilon;
++}
+ 
+ // Calculates and caches for the candidates in the list between
+ // `single_on_top_candidates_start` (inclusively) and
+@@ -132,6 +158,10 @@ void OverlayStrategySingleOnTop::Propose(
+       continue;
+     }
+ 
++    const bool force_v4l2_no_scale_overlay =
++        ::features::IsV4L2NoScaleOverlayPanfrostWorkaroundsEnabled() &&
++        IsV4L2NoScaleOverlayCandidate(candidate);
++
+     if (candidate.has_rounded_display_masks) {
+       // Quads with rounded-display masks are only considered as SingleOnTop
+       // candidates if they are the top most quads.
+@@ -153,6 +183,8 @@ void OverlayStrategySingleOnTop::Propose(
+       // candidates that are occluded by these mask candidates will be
+       // composited for UI correctness.
+       candidates->emplace_back(quad_it, candidate, this);
++    } else if (force_v4l2_no_scale_overlay) {
++      candidates->emplace_back(quad_it, candidate, this);
+     }
+   }
+ 
+diff --git a/components/viz/service/display/overlay_strategy_underlay.cc b/components/viz/service/display/overlay_strategy_underlay.cc
+index 127ad1b672..030f571a5e 100644
+--- a/components/viz/service/display/overlay_strategy_underlay.cc
++++ b/components/viz/service/display/overlay_strategy_underlay.cc
+@@ -4,15 +4,45 @@
+ 
+ #include "components/viz/service/display/overlay_strategy_underlay.h"
+ 
++#include <cmath>
+ #include <vector>
+ 
++#include "base/feature_list.h"
+ #include "components/viz/common/quads/aggregated_render_pass.h"
+ #include "components/viz/common/quads/draw_quad.h"
+ #include "components/viz/common/quads/solid_color_draw_quad.h"
+ #include "components/viz/service/display/display_resource_provider.h"
+ #include "components/viz/service/display/overlay_candidate_factory.h"
++#include "ui/base/ui_base_features.h"
+ 
+ namespace viz {
++namespace {
++
++constexpr float kV4L2NoScaleOverlayEpsilon = 0.01f;
++
++bool IsV4L2NoScaleOverlayCandidate(const OverlayCandidate& candidate) {
++  return candidate.format.is_multi_plane() &&
++         candidate.format.plane_config() ==
++             SharedImageFormat::PlaneConfig::kY_UV &&
++         candidate.format.subsampling() ==
++             SharedImageFormat::Subsampling::k420 &&
++         candidate.format.channel_format() ==
++             SharedImageFormat::ChannelFormat::k8 &&
++         std::abs(candidate.uv_rect.x()) <= kV4L2NoScaleOverlayEpsilon &&
++         std::abs(candidate.uv_rect.y()) <= kV4L2NoScaleOverlayEpsilon &&
++         std::abs(candidate.uv_rect.width() - 1.f) <=
++             kV4L2NoScaleOverlayEpsilon &&
++         std::abs(candidate.uv_rect.height() - 1.f) <=
++             kV4L2NoScaleOverlayEpsilon &&
++         std::abs(candidate.display_rect.width() -
++                  candidate.resource_size_in_pixels.width()) <=
++             kV4L2NoScaleOverlayEpsilon &&
++         std::abs(candidate.display_rect.height() -
++                  candidate.resource_size_in_pixels.height()) <=
++             kV4L2NoScaleOverlayEpsilon;
++}
++
++}  // namespace
+ 
+ OverlayStrategyUnderlay::OverlayStrategyUnderlay(
+     OverlayProcessorUsingStrategy* capability_checker,
+@@ -57,6 +87,11 @@ void OverlayStrategyUnderlay::Propose(
+       continue;
+     }
+ 
++    if (::features::IsV4L2NoScaleOverlayPanfrostWorkaroundsEnabled() &&
++        IsV4L2NoScaleOverlayCandidate(candidate)) {
++      continue;
++    }
++
+     // Filters read back the framebuffer to get the pixel values that need to
+     // be filtered.  This is a problem when there are hardware planes because
+     // the planes are not composited until they are on the display controller.
+diff --git a/components/viz/service/display_embedder/skia_output_device_buffer_queue.cc b/components/viz/service/display_embedder/skia_output_device_buffer_queue.cc
+index a122f6b5a5..6f58cb08d2 100644
+--- a/components/viz/service/display_embedder/skia_output_device_buffer_queue.cc
++++ b/components/viz/service/display_embedder/skia_output_device_buffer_queue.cc
+@@ -32,6 +32,7 @@
+ #include "third_party/skia/include/core/SkSurface.h"
+ #include "third_party/skia/include/core/SkSurfaceProps.h"
+ #include "ui/gfx/gpu_fence_handle.h"
++#include "ui/base/ui_base_features.h"
+ #include "ui/gfx/swap_result.h"
+ #include "ui/gl/gl_fence.h"
+ #include "ui/gl/gl_surface.h"
+@@ -56,6 +57,10 @@ NOINLINE void CheckForLoopFailuresBufferQueue() {
+   }
+   g_last_reshape_failure = now;
+ }
++
++bool IsV4L2NoScaleOverlayPanfrostWorkaroundsEnabled() {
++  return ::features::IsV4L2NoScaleOverlayPanfrostWorkaroundsEnabled();
++}
+ }  // namespace
+ 
+ namespace viz {
+@@ -106,10 +111,13 @@ class SkiaOutputDeviceBufferQueue::OverlayData {
+ 
+   void OnReuse() const {
+     // This is a proxy check for single-buffered overlay.
+-    if (representation_->usage().Has(
+-            gpu::SHARED_IMAGE_USAGE_CONCURRENT_READ_WRITE) &&
+-        base::FeatureList::IsEnabled(
+-            kRestartReadAccessForConcurrentReadWrite)) {
++    const bool force_restart_for_v4l2_nv12 =
++        IsV4L2NoScaleOverlayPanfrostWorkaroundsEnabled() &&
++        representation_->format() == MultiPlaneFormat::kNV12;
++    if ((representation_->usage().Has(
++             gpu::SHARED_IMAGE_USAGE_CONCURRENT_READ_WRITE) &&
++         base::FeatureList::IsEnabled(kRestartReadAccessForConcurrentReadWrite)) ||
++        force_restart_for_v4l2_nv12) {
+       // If this is a single-buffered overlay, want to restart read access to
+       // pick up any new write fences for this frame.
+       scoped_read_access_.reset();
+@@ -319,6 +327,9 @@ void SkiaOutputDeviceBufferQueue::ScheduleOverlays(
+     if (overlay_data) {
+       access = overlay_data->scoped_read_access();
+       pending_overlay_mailboxes_.emplace_back(mailbox);
++    } else if (!overlay.is_root_render_pass &&
++               IsV4L2NoScaleOverlayPanfrostWorkaroundsEnabled()) {
++      continue;
+     }
+     presenter_->ScheduleOverlayPlane(overlay, access);
+   }
+diff --git a/media/gpu/chromeos/mailbox_video_frame_converter.cc b/media/gpu/chromeos/mailbox_video_frame_converter.cc
+index 4ed96a780c..45f741262a 100644
+--- a/media/gpu/chromeos/mailbox_video_frame_converter.cc
++++ b/media/gpu/chromeos/mailbox_video_frame_converter.cc
+@@ -325,12 +325,14 @@ void MailboxVideoFrameConverter::ConvertFrame(
+       // color space has changed. Let's create a new shared image.
+       res = GenerateSharedImage(origin_frame, src_color_space, visible_rect,
+                                 stored_shared_image);
+-      sync_token = client_shared_image->creation_sync_token();
++      if (res) {
++        sync_token = stored_shared_image->shared_image()->creation_sync_token();
++      }
+     }
+     if (res) {
+       DCHECK(stored_shared_image->HasData());
+       WrapSharedImageAndVideoFrameAndOutput(origin_frame, std::move(frame),
+-                                            std::move(client_shared_image),
++                                            stored_shared_image->shared_image(),
+                                             sync_token.value());
+     }
+     return;
+@@ -347,6 +349,11 @@ void MailboxVideoFrameConverter::ConvertFrame(
+   scoped_refptr<gpu::ClientSharedImage> new_client_shared_image =
+       new_shared_image->shared_image();
+   gpu::SyncToken sync_token = new_client_shared_image->creation_sync_token();
++  std::optional<gpu::SyncToken> verified_sync_token =
++      shared_image_interface_->GenVerifiedSyncToken();
++  if (verified_sync_token.has_value()) {
++    sync_token = verified_sync_token.value();
++  }
+   RegisterSharedImage(origin_frame, std::move(new_shared_image));
+   WrapSharedImageAndVideoFrameAndOutput(origin_frame, std::move(frame),
+                                         std::move(new_client_shared_image),
+diff --git a/media/gpu/v4l2/BUILD.gn b/media/gpu/v4l2/BUILD.gn
+index 6136afe51c..9a4ff77f0c 100644
+--- a/media/gpu/v4l2/BUILD.gn
++++ b/media/gpu/v4l2/BUILD.gn
+@@ -117,6 +117,7 @@ source_set("v4l2") {
+     "//media/gpu/chromeos:common",
+     "//third_party/libgav1:libgav1_parser",
+     "//third_party/libyuv",
++    "//ui/base",
+     "//ui/gfx/geometry",
+     "//ui/ozone",
+   ]
+diff --git a/media/gpu/v4l2/legacy/v4l2_video_decode_accelerator.cc b/media/gpu/v4l2/legacy/v4l2_video_decode_accelerator.cc
+index 3b747aa922..0f75a7ad80 100644
+--- a/media/gpu/v4l2/legacy/v4l2_video_decode_accelerator.cc
++++ b/media/gpu/v4l2/legacy/v4l2_video_decode_accelerator.cc
+@@ -22,6 +22,7 @@
+ #include <algorithm>
+ 
+ #include "base/command_line.h"
++#include "base/feature_list.h"
+ #include "base/functional/bind.h"
+ #include "base/functional/callback_helpers.h"
+ #include "base/numerics/safe_conversions.h"
+@@ -47,6 +48,7 @@
+ #include "media/gpu/v4l2/v4l2_vda_helpers.h"
+ #include "media/gpu/video_frame_mapper.h"
+ #include "media/gpu/video_frame_mapper_factory.h"
++#include "ui/base/ui_base_features.h"
+ #include "ui/gfx/geometry/rect.h"
+ #include "ui/gfx/native_pixmap_handle.h"
+ 
+@@ -88,6 +90,10 @@ bool IsVp9KSVCStream(uint32_t input_format_fourcc,
+          !decoder_buffer.side_data()->spatial_layers.empty();
+ }
+ 
++bool IsV4L2NoScaleOverlayEnabled() {
++  return base::FeatureList::IsEnabled(::features::kV4L2NoScaleOverlay);
++}
++
+ }  // namespace
+ 
+ static const std::vector<uint32_t> kSupportedInputFourCCs = {
+@@ -628,6 +634,11 @@ void V4L2VideoDecodeAccelerator::ImportBufferForPictureTask(
+     iter->output_frame = NativePixmapFrameResource::Create(
+         *layout, gfx::Rect(visible_size_), visible_size_, std::move(duped_fds),
+         base::TimeDelta());
++    if (iter->output_frame &&
++        iter->output_frame->format() == PIXEL_FORMAT_NV12 &&
++        IsV4L2NoScaleOverlayEnabled()) {
++      iter->output_frame->metadata().allow_overlay = true;
++    }
+   }
+ 
+   // The buffer can now be used for decoding
+diff --git a/media/gpu/v4l2/v4l2_queue.cc b/media/gpu/v4l2/v4l2_queue.cc
+index 907a58f1fb..42f1cd4d63 100644
+--- a/media/gpu/v4l2/v4l2_queue.cc
++++ b/media/gpu/v4l2/v4l2_queue.cc
+@@ -18,6 +18,7 @@
+ #include <sys/mman.h>
+ 
+ #include "base/containers/contains.h"
++#include "base/feature_list.h"
+ #include "base/memory/ref_counted.h"
+ #include "base/memory/scoped_refptr.h"
+ #include "base/not_fatal_until.h"
+@@ -27,6 +28,7 @@
+ #include "media/gpu/chromeos/native_pixmap_frame_resource.h"
+ #include "media/gpu/chromeos/platform_video_frame_utils.h"
+ #include "media/gpu/macros.h"
++#include "ui/base/ui_base_features.h"
+ 
+ namespace media {
+ 
+@@ -38,6 +40,10 @@ namespace {
+ // Maximum number of requests that can be created.
+ constexpr size_t kMaxNumRequests = 32;
+ 
++bool IsV4L2NoScaleOverlayEnabled() {
++  return base::FeatureList::IsEnabled(::features::kV4L2NoScaleOverlay);
++}
++
+ gfx::Rect V4L2RectToGfxRect(const v4l2_rect& rect) {
+   return gfx::Rect(rect.left, rect.top, rect.width, rect.height);
+ }
+@@ -359,8 +365,14 @@ scoped_refptr<FrameResource> V4L2Buffer::CreateFrame() {
+ 
+   gfx::Size size(format_.fmt.pix_mp.width, format_.fmt.pix_mp.height);
+ 
+-  return NativePixmapFrameResource::Create(
++  scoped_refptr<FrameResource> frame = NativePixmapFrameResource::Create(
+       *layout, gfx::Rect(size), size, std::move(dmabuf_fds), base::TimeDelta());
++  if (frame && frame->format() == PIXEL_FORMAT_NV12 &&
++      IsV4L2NoScaleOverlayEnabled()) {
++    frame->metadata().allow_overlay = true;
++  }
++
++  return frame;
+ }
+ 
+ const scoped_refptr<FrameResource>& V4L2Buffer::GetFrameResource() {
+diff --git a/ui/base/ui_base_features.cc b/ui/base/ui_base_features.cc
+index 82a0fc43ab..00a8d74f08 100644
+--- a/ui/base/ui_base_features.cc
++++ b/ui/base/ui_base_features.cc
+@@ -148,6 +148,14 @@ BASE_FEATURE(kV4L2NoScaleOverlay,
+              "V4L2NoScaleOverlay",
+              base::FEATURE_DISABLED_BY_DEFAULT);
+ 
++const base::FeatureParam<bool> kV4L2NoScaleOverlayPanfrostWorkarounds{
++    &kV4L2NoScaleOverlay, "panfrost_workarounds", false};
++
++bool IsV4L2NoScaleOverlayPanfrostWorkaroundsEnabled() {
++  return base::FeatureList::IsEnabled(kV4L2NoScaleOverlay) &&
++         kV4L2NoScaleOverlayPanfrostWorkarounds.Get();
++}
++
+ #if BUILDFLAG(IS_LINUX)
+ // If this feature is enabled, users not specify --ozone-platform-hint switch
+ // will get --ozone-platform-hint=auto treatment. https://crbug.com/40250220.
+diff --git a/ui/base/ui_base_features.h b/ui/base/ui_base_features.h
+index a459356d6f..37a9c69acb 100644
+--- a/ui/base/ui_base_features.h
++++ b/ui/base/ui_base_features.h
+@@ -131,6 +131,8 @@ BASE_DECLARE_FEATURE(kWaylandSessionManagement);
+ 
+ COMPONENT_EXPORT(UI_BASE_FEATURES)
+ BASE_DECLARE_FEATURE(kV4L2NoScaleOverlay);
++COMPONENT_EXPORT(UI_BASE_FEATURES)
++bool IsV4L2NoScaleOverlayPanfrostWorkaroundsEnabled();
+ 
+ #if BUILDFLAG(IS_LINUX)
+ COMPONENT_EXPORT(UI_BASE_FEATURES)
+diff --git a/ui/gfx/linux/gbm_wrapper.cc b/ui/gfx/linux/gbm_wrapper.cc
+index 1b5d52cbb3..5cb0d11e94 100644
+--- a/ui/gfx/linux/gbm_wrapper.cc
++++ b/ui/gfx/linux/gbm_wrapper.cc
+@@ -9,6 +9,7 @@
+ 
+ #include "ui/gfx/linux/gbm_wrapper.h"
+ 
++#include <drm_fourcc.h>
+ #include <gbm.h>
+ #include <sys/mman.h>
+ 
+@@ -404,8 +405,14 @@ class Device final : public ui::GbmDevice {
+ 
+     int gbm_flags = 0;
+     if ((gbm_flags = GetSupportedGbmFlags(format)) == 0) {
+-      LOG(ERROR) << "gbm format not supported: " << DrmFormatToString(format);
+-      return nullptr;
++      if (format != DRM_FORMAT_NV12) {
++        LOG(ERROR) << "gbm format not supported: " << DrmFormatToString(format);
++        return nullptr;
++      }
++      // Some Mesa/Panfrost configurations can import decoder-provided NV12
++      // dmabufs even when gbm_device_is_format_supported() rejects creating
++      // that format. Try the import path instead of rejecting it up front.
++      gbm_flags = GBM_BO_USE_SCANOUT;
+     }
+ 
+     struct gbm_import_fd_modifier_data fd_data;
+@@ -427,6 +434,12 @@ class Device final : public ui::GbmDevice {
+     // kept open for the lifetime of the buffer.
+     struct gbm_bo* bo = gbm_bo_import(device_.get(), GBM_BO_IMPORT_FD_MODIFIER,
+                                       &fd_data, gbm_flags);
++    if (!bo && format == DRM_FORMAT_NV12 && gbm_flags != 0) {
++      bo = gbm_bo_import(device_.get(), GBM_BO_IMPORT_FD_MODIFIER, &fd_data, 0);
++      if (bo) {
++        gbm_flags = 0;
++      }
++    }
+     if (!bo) {
+       LOG(ERROR) << "nullptr returned from gbm_bo_import";
+       return nullptr;
+diff --git a/ui/ozone/platform/wayland/gpu/wayland_overlay_manager.cc b/ui/ozone/platform/wayland/gpu/wayland_overlay_manager.cc
+index 28af6adc6b..17c823dde9 100644
+--- a/ui/ozone/platform/wayland/gpu/wayland_overlay_manager.cc
++++ b/ui/ozone/platform/wayland/gpu/wayland_overlay_manager.cc
+@@ -29,10 +29,18 @@ bool IsYuvCandidate(const OverlaySurfaceCandidate& candidate) {
+   return candidate.format == gfx::BufferFormat::YUV_420_BIPLANAR;
+ }
+ 
++bool IsV4L2NoScaleOverlayEnabled() {
++  return base::FeatureList::IsEnabled(::features::kV4L2NoScaleOverlay);
++}
++
++bool IsV4L2NoScaleOverlayPanfrostWorkaroundsEnabled() {
++  return ::features::IsV4L2NoScaleOverlayPanfrostWorkaroundsEnabled();
++}
++
+ void LogYuvCandidateDecision(const OverlaySurfaceCandidate& candidate,
+                              const char* reason,
+                              bool handled) {
+-  if (!base::FeatureList::IsEnabled(::features::kV4L2NoScaleOverlay)) {
++  if (!IsV4L2NoScaleOverlayEnabled()) {
+     return;
+   }
+   static int log_count = 0;
+@@ -198,6 +206,17 @@ bool WaylandOverlayManager::CanHandleCandidate(
+     return false;
+   }
+ 
++  // RZ/G DU/Weston can use NV12 as a delegated overlay plane, but promoting it
++  // as a Viz underlay makes the output surface plane depend on overlay
++  // representation support that is not reliable on the Panfrost path. Allow
++  // only real on-top NV12 overlays; otherwise fall back to GPU composition.
++  if (IsYuvCandidate(candidate) &&
++      IsV4L2NoScaleOverlayPanfrostWorkaroundsEnabled() &&
++      candidate.plane_z_order < 1) {
++    LogYuvCandidateDecision(candidate, "nv12_underlay_not_supported", false);
++    return false;
++  }
++
+   if (is_delegated_context_) {
+     // Subpixel accurate position is not available.
+     NotifyOverlayDelegationLimitedCapabilityOnce();
+diff --git a/ui/ozone/platform/wayland/gpu/wayland_surface_factory.cc b/ui/ozone/platform/wayland/gpu/wayland_surface_factory.cc
+index 13a7b7eda3..8356100b7f 100644
+--- a/ui/ozone/platform/wayland/gpu/wayland_surface_factory.cc
++++ b/ui/ozone/platform/wayland/gpu/wayland_surface_factory.cc
+@@ -8,11 +8,14 @@
+ 
+ #include "base/memory/ptr_util.h"
+ #include "base/memory/raw_ptr.h"
++#include "base/feature_list.h"
+ #include "ui/gfx/linux/client_native_pixmap_dmabuf.h"
+ #include "ui/gfx/linux/native_pixmap_dmabuf.h"
++#include "ui/gfx/native_pixmap_handle.h"
+ #include "ui/gl/gl_bindings.h"
+ #include "ui/gl/gl_surface_egl.h"
+ #include "ui/gl/presenter.h"
++#include "ui/base/ui_base_features.h"
+ #include "ui/ozone/common/egl_util.h"
+ #include "ui/ozone/common/gl_ozone_egl.h"
+ #include "ui/ozone/common/native_pixmap_egl_binding.h"
+@@ -26,6 +29,8 @@
+ #include "ui/ozone/platform/wayland/host/wayland_window_manager.h"
+ 
+ #if defined(WAYLAND_GBM)
++#include <drm_fourcc.h>
++
+ #include "ui/gfx/buffer_format_util.h"
+ #include "ui/gfx/linux/drm_util_linux.h"
+ #include "ui/gfx/linux/gbm_device.h"  // nogncheck
+@@ -42,6 +47,10 @@ namespace ui {
+ 
+ namespace {
+ 
++bool IsV4L2NoScaleOverlayPanfrostWorkaroundsEnabled() {
++  return ::features::IsV4L2NoScaleOverlayPanfrostWorkaroundsEnabled();
++}
++
+ class GLOzoneEGLWayland : public GLOzoneEGL {
+  public:
+   GLOzoneEGLWayland(WaylandConnection* connection,
+@@ -286,15 +295,31 @@ WaylandSurfaceFactory::CreateNativePixmapFromHandle(
+     gfx::NativePixmapHandle handle) {
+ #if defined(WAYLAND_GBM)
+   auto* gbm_device = buffer_manager_->GetGbmDevice();
+-  if (gbm_device && gbm_device->CanCreateBufferForFormat(
+-                        GetFourCCFormatFromBufferFormat(format))) {
++  const uint32_t fourcc_format = GetFourCCFormatFromBufferFormat(format);
++  const bool can_create_buffer =
++      gbm_device && gbm_device->CanCreateBufferForFormat(fourcc_format);
++  const bool force_wayland_gbm_import =
++      IsV4L2NoScaleOverlayPanfrostWorkaroundsEnabled() &&
++      format == gfx::BufferFormat::YUV_420_BIPLANAR && gbm_device;
++  if (can_create_buffer || force_wayland_gbm_import) {
+     scoped_refptr<GbmPixmapWayland> pixmap =
+         base::MakeRefCounted<GbmPixmapWayland>(buffer_manager_);
++    gfx::NativePixmapHandle import_handle =
++        force_wayland_gbm_import ? gfx::CloneHandleForIPC(handle)
++                                 : std::move(handle);
++    if (force_wayland_gbm_import &&
++        import_handle.modifier == DRM_FORMAT_MOD_INVALID) {
++      import_handle.modifier = DRM_FORMAT_MOD_LINEAR;
++    }
+     if (pixmap->InitializeBufferFromHandle(widget, size, format,
+-                                           std::move(handle))) {
++                                           std::move(import_handle))) {
+       return pixmap;
+     }
+-  } else {
++    if (!force_wayland_gbm_import) {
++      return nullptr;
++    }
++  }
++  {
+     scoped_refptr<gfx::NativePixmapDmaBuf> pixmap =
+         base::MakeRefCounted<gfx::NativePixmapDmaBuf>(size, format,
+                                                       std::move(handle));
+diff --git a/ui/ozone/platform/wayland/host/wayland_frame_manager.cc b/ui/ozone/platform/wayland/host/wayland_frame_manager.cc
+index 9d1ea0cfc4..86a8a6182e 100644
+--- a/ui/ozone/platform/wayland/host/wayland_frame_manager.cc
++++ b/ui/ozone/platform/wayland/host/wayland_frame_manager.cc
+@@ -4,6 +4,7 @@
+ 
+ #include "ui/ozone/platform/wayland/host/wayland_frame_manager.h"
+ 
++#include <drm_fourcc.h>
+ #include <presentation-time-client-protocol.h>
+ #include <sync/sync.h>
+ 
+@@ -12,6 +13,7 @@
+ 
+ #include "base/containers/adapters.h"
+ #include "base/containers/fixed_flat_set.h"
++#include "base/feature_list.h"
+ #include "base/time/time.h"
+ #include "base/trace_event/trace_event.h"
+ #include "base/trace_event/typed_macros.h"
+@@ -21,6 +23,7 @@
+ #include "ui/gfx/geometry/size_conversions.h"
+ #include "ui/gfx/overlay_priority_hint.h"
+ #include "ui/gfx/swap_result.h"
++#include "ui/base/ui_base_features.h"
+ #include "ui/ozone/platform/wayland/host/wayland_buffer_backing.h"
+ #include "ui/ozone/platform/wayland/host/wayland_buffer_factory.h"
+ #include "ui/ozone/platform/wayland/host/wayland_buffer_handle.h"
+@@ -49,6 +52,10 @@ constexpr base::TimeDelta kPresentationFlushTimerStopThreshold =
+ constexpr char kBoundsRectNanOrInf[] =
+     "Overlay bounds_rect is invalid (NaN or infinity).";
+ 
++bool IsV4L2NoScaleOverlayPanfrostWorkaroundsEnabled() {
++  return ::features::IsV4L2NoScaleOverlayPanfrostWorkaroundsEnabled();
++}
++
+ bool ValidateRect(const gfx::RectF& rect) {
+   return !std::isnan(rect.x()) && !std::isnan(rect.y()) &&
+          !std::isnan(rect.width()) && !std::isnan(rect.height()) &&
+@@ -441,7 +448,14 @@ std::optional<bool> WaylandFrameManager::ApplySurfaceConfigure(
+       connection_->buffer_manager_host()->GetBufferHandle(surface,
+                                                           config.buffer_id);
+   DCHECK(buffer_handle);
+-  bool will_attach = surface->AttachBuffer(buffer_handle);
++  const bool is_v4l2_nv12_dmabuf =
++      IsV4L2NoScaleOverlayPanfrostWorkaroundsEnabled() &&
++      buffer_handle->backing_type() ==
++          WaylandBufferBacking::BufferBackingType::kDmabuf &&
++      connection_->buffer_manager_host()->GetBufferFormat(surface,
++                                                          config.buffer_id) ==
++          DRM_FORMAT_NV12;
++  bool will_attach = surface->AttachBuffer(buffer_handle, is_v4l2_nv12_dmabuf);
+   // If we don't attach a released buffer, graphics freeze will occur.
+   DCHECK(will_attach || !buffer_handle->released(surface));
+ 
+@@ -458,6 +472,9 @@ std::optional<bool> WaylandFrameManager::ApplySurfaceConfigure(
+   // `bounds_rect` origin.
+   gfx::RectF surface_damage = gfx::RectF(config.damage_region);
+   surface_damage -= config.bounds_rect.OffsetFromOrigin();
++  if (is_v4l2_nv12_dmabuf && surface_damage.IsEmpty()) {
++    surface_damage = gfx::RectF(config.bounds_rect.size());
++  }
+   surface->UpdateBufferDamageRegion(
+       gfx::ToEnclosingRectIgnoringError(surface_damage));
+ 
+diff --git a/ui/ozone/platform/wayland/host/wayland_surface.cc b/ui/ozone/platform/wayland/host/wayland_surface.cc
+index 86d57e3077..cb69280894 100644
+--- a/ui/ozone/platform/wayland/host/wayland_surface.cc
++++ b/ui/ozone/platform/wayland/host/wayland_surface.cc
+@@ -278,7 +278,8 @@ void WaylandSurface::set_acquire_fence(gfx::GpuFenceHandle acquire_fence) {
+   return;
+ }
+ 
+-bool WaylandSurface::AttachBuffer(WaylandBufferHandle* buffer_handle) {
++bool WaylandSurface::AttachBuffer(WaylandBufferHandle* buffer_handle,
++                                  bool force_attach) {
+   DCHECK(!apply_state_immediately_);
+   if (!buffer_handle) {
+     pending_state_.buffer = nullptr;
+@@ -291,7 +292,7 @@ bool WaylandSurface::AttachBuffer(WaylandBufferHandle* buffer_handle) {
+   pending_state_.buffer_id = buffer_handle->id();
+ 
+   if (state_.buffer_id == pending_state_.buffer_id &&
+-      buffer_handle->released(this)) {
++      (force_attach || buffer_handle->released(this))) {
+     state_.buffer = nullptr;
+     state_.buffer_id = 0;
+   }
+diff --git a/ui/ozone/platform/wayland/host/wayland_surface.h b/ui/ozone/platform/wayland/host/wayland_surface.h
+index be4cb21290..f65252c76a 100644
+--- a/ui/ozone/platform/wayland/host/wayland_surface.h
++++ b/ui/ozone/platform/wayland/host/wayland_surface.h
+@@ -90,7 +90,8 @@ class WaylandSurface {
+ 
+   // Attaches the given wl_buffer to the underlying wl_surface at (0, 0).
+   // Returns true if wl_surface.attach will be called in ApplyPendingStates().
+-  bool AttachBuffer(WaylandBufferHandle* buffer_handle);
++  bool AttachBuffer(WaylandBufferHandle* buffer_handle,
++                    bool force_attach = false);
+ 
+   // Describes where the surface needs to be repainted according to
+   // |buffer_pending_damage_region|, which should be in buffer coordinates (px).
+-- 
+2.43.0
+

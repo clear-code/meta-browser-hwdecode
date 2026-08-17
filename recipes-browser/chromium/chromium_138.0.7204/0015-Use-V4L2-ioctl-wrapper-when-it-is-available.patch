@@ -1,7 +1,7 @@
 From 14a30b7f4077e4f223e69557c4db3519a4e79c33 Mon Sep 17 00:00:00 2001
 From: Kentaro Hayashi <hayashi@clear-code.com>
 Date: Mon, 14 Jul 2025 11:51:10 +0900
-Subject: [PATCH 15/20] Use V4L2 ioctl wrapper when it is available
+Subject: [PATCH 15/21] Use V4L2 ioctl wrapper when it is available
 
 It fixes the following error:
 

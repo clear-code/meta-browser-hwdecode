@@ -1,7 +1,7 @@
 From f74691f3c95ae736eb18557c788ad42a4fbc35da Mon Sep 17 00:00:00 2001
 From: Takuro Ashie <ashie@clear-code.com>
 Date: Thu, 26 Mar 2026 17:14:22 +0900
-Subject: [PATCH 14/20] v4l2_queue: Correct plane offset
+Subject: [PATCH 14/21] v4l2_queue: Correct plane offset
 
 Upstream-Status: Pending
 

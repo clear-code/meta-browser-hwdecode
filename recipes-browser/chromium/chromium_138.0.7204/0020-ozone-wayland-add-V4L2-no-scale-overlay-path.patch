@@ -1,7 +1,7 @@
 From 87b3abac413f4e016ae8a55c838b01f597d03bff Mon Sep 17 00:00:00 2001
 From: Takuro Ashie <ashie@clear-code.com>
 Date: Tue, 11 Aug 2026 18:13:12 +0900
-Subject: [PATCH 20/20] ozone/wayland: add V4L2 no-scale overlay path
+Subject: [PATCH 20/21] ozone/wayland: add V4L2 no-scale overlay path
 
 Add a V4L2NoScaleOverlay feature for RZ/G2L Wayland/Westonl deployments
 where V4L2 decoded NV12 dmabufs can be promoted to a KMS plane only

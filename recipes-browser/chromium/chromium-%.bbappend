@@ -55,6 +55,14 @@ def chromium_mali_dri_render_node_arg(d):
     # Need to escape '/' because this value is processed by sed with '/' delimiter.
     return " --render-node-override=\\/dev\\/dri\\/card0 "
 
+def chromium_v4l2_no_scale_overlay_feature(d):
+    if bb.utils.contains("BBFILE_COLLECTIONS", "meta-panfrost", True, False, d):
+        # Need to escape '/' because this value is processed by sed with '/'
+        # delimiter.
+        return " V4L2NoScaleOverlay:panfrost_workarounds\\/true"
+
+    return " V4L2NoScaleOverlay"
+
 RDEPENDS:${PN} += "${@bb.utils.contains('PACKAGECONFIG', 'use-v4l2', 'v4l-gst', '', d)}"
 
 GN_ARGS:append = " fatal_linker_warnings=false"
@@ -62,7 +70,7 @@ GN_ARGS:append = " fatal_linker_warnings=false"
 CHROMIUM_ENABLE_FEATURES = ""
 CHROMIUM_DISABLE_FEATURES = ""
 CHROMIUM_ENABLE_FEATURES:append = "${@bb.utils.contains('PACKAGECONFIG', 'use-v4l2', ' AcceleratedVideoDecoder AcceleratedVideoDecodeLinuxGL AcceleratedVideoDecodeLinuxZeroCopyGL', '', d)}"
-CHROMIUM_ENABLE_FEATURES:append = "${@bb.utils.contains('PACKAGECONFIG', 'use-v4l2-overlay', ' V4L2NoScaleOverlay', '', d)}"
+CHROMIUM_ENABLE_FEATURES:append = "${@bb.utils.contains('PACKAGECONFIG', 'use-v4l2-overlay', chromium_v4l2_no_scale_overlay_feature(d), '', d)}"
 
 CHROMIUM_UPSTREAM_V4L2_ENABLE_FEATURES_ARG = "--enable-features=AcceleratedVideoDecoder,AcceleratedVideoDecodeLinuxGL,AcceleratedVideoDecodeLinuxZeroCopyGL"
 CHROMIUM_EXTRA_ARGS:remove = "${@bb.utils.contains('PACKAGECONFIG', 'use-v4l2-overlay', d.getVar('CHROMIUM_UPSTREAM_V4L2_ENABLE_FEATURES_ARG'), '', d)}"
