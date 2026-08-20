@@ -1,0 +1,52 @@
+From 517b608e7e89848b7a6748d21712da1b89dfbd62 Mon Sep 17 00:00:00 2001
+From: Takuro Ashie <ashie@clear-code.com>
+Date: Thu, 20 Aug 2026 16:00:37 +0900
+Subject: [PATCH] panfrost: Reallocate BO when linear conversion grows layout
+
+A linear layout can be larger than the original tiled BO for
+non-standard resource sizes. Allocate a BO matching the new layout
+before copying a fully overwritten resource.
+
+Upstream-Status: Submitted [https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/43893]
+
+Signed-off-by: Takuro Ashie <ashie@clear-code.com>
+---
+ src/gallium/drivers/panfrost/pan_resource.c | 24 ++++++++++++++++++---
+ 1 file changed, 21 insertions(+), 3 deletions(-)
+
+diff --git a/src/gallium/drivers/panfrost/pan_resource.c b/src/gallium/drivers/panfrost/pan_resource.c
+index 549380f..c2f641e 100644
+--- a/src/gallium/drivers/panfrost/pan_resource.c
++++ b/src/gallium/drivers/panfrost/pan_resource.c
+@@ -2355,10 +2355,28 @@ panfrost_ptr_unmap(struct pipe_context *pctx, struct pipe_transfer *transfer)
+                panfrost_resource_setup(screen, prsrc, DRM_FORMAT_MOD_LINEAR,
+                                        prsrc->image.props.format, 0);
+ 
+-               /* converting the resource from tiled to linear and back
+-                * shouldn't increase memory usage...
++               /* A linear layout can be larger than the original tiled BO.
++                * This is possible for non-standard resource sizes, e.g.
++                * 592x336 R8 textures. This path is only used after a full
++                * resource overwrite, so allocate a BO matching the new
++                * layout instead of reusing the smaller tiled BO.
+                 */
+-               assert(prsrc->plane.layout.data_size_B <= panfrost_bo_size(bo));
++               if (prsrc->plane.layout.data_size_B > panfrost_bo_size(bo)) {
++                  uint32_t flags = bo->flags & ~PAN_BO_DELAY_MMAP;
++                  struct panfrost_bo *newbo = panfrost_bo_create(
++                     dev, prsrc->plane.layout.data_size_B, flags, bo->label);
++
++                  if (!newbo) {
++                     mesa_loge("Failed to allocate linear BO for resource "
++                               "conversion");
++                     return;
++                  }
++
++                  panfrost_bo_unreference(prsrc->bo);
++                  prsrc->bo = newbo;
++                  prsrc->plane.base = newbo->ptr.gpu;
++                  bo = newbo;
++               }
+ 
+                util_copy_rect(
+                   bo->ptr.cpu + prsrc->plane.layout.slices[0].offset_B,
