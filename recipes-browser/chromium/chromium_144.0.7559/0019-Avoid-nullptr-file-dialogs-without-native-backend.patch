@@ -1,0 +1,182 @@
+From 0306eb0cb1bade0cbf9ce1df137d0fb14d362115 Mon Sep 17 00:00:00 2001
+From: Takuro Ashie <ashie@clear-code.com>
+Date: Thu, 7 May 2026 13:08:03 +0900
+Subject: [PATCH 19/21] Avoid nullptr file dialogs without native backend
+
+Upstream-Status: Inappropriate [oe specific]
+
+Signed-off-by: Takuro Ashie <ashie@clear-code.com>
+---
+ ui/shell_dialogs/shell_dialog_linux.cc | 115 ++++++++++++++++++++++++-
+ 1 file changed, 112 insertions(+), 3 deletions(-)
+
+diff --git a/ui/shell_dialogs/shell_dialog_linux.cc b/ui/shell_dialogs/shell_dialog_linux.cc
+index 1a4daf4ee5..07d699e706 100644
+--- a/ui/shell_dialogs/shell_dialog_linux.cc
++++ b/ui/shell_dialogs/shell_dialog_linux.cc
+@@ -4,11 +4,15 @@
+ 
+ #include "ui/shell_dialogs/shell_dialog_linux.h"
+ 
++#include "base/logging.h"
++#include "base/memory/weak_ptr.h"
+ #include "base/notreached.h"
++#include "base/task/single_thread_task_runner.h"
+ #include "build/config/linux/dbus/buildflags.h"
+ #include "ui/linux/linux_ui.h"
+ #include "ui/shell_dialogs/select_file_dialog_linux.h"
+ #include "ui/shell_dialogs/select_file_policy.h"
++#include "ui/shell_dialogs/selected_file_info.h"
+ 
+ #if BUILDFLAG(USE_DBUS)
+ #include "ui/shell_dialogs/select_file_dialog_linux_portal.h"
+@@ -28,17 +32,32 @@ namespace ui {
+ 
+ namespace {
+ 
++namespace switches {
++inline constexpr char kFileDialogMode[] = "file-dialog-mode";
++inline constexpr char kFileDialogModeAutoCancel[] = "auto-cancel";
++inline constexpr char kFileDialogModeAutoAccept[] = "auto-accept";
++}
++
+ enum FileDialogChoice {
+   kUnknown,
+   kToolkit,
+ #if BUILDFLAG(USE_DBUS)
+   kPortal,
+ #endif
++  kAutoCancel,
++  kAutoAccept,
+ };
+ 
+ FileDialogChoice dialog_choice_ = kUnknown;
+ 
+ FileDialogChoice GetFileDialogChoice() {
++  auto* command_line = base::CommandLine::ForCurrentProcess();
++  auto mode = command_line->GetSwitchValueASCII(switches::kFileDialogMode);
++  if (mode == switches::kFileDialogModeAutoCancel)
++    return kAutoCancel;
++  if (mode == switches::kFileDialogModeAutoAccept)
++    return kAutoAccept;
++
+ #if BUILDFLAG(USE_DBUS)
+   // Check to see if the portal is available.
+   if (SelectFileDialogLinuxPortal::IsPortalAvailable())
+@@ -50,6 +69,88 @@ FileDialogChoice GetFileDialogChoice() {
+ 
+ }  // namespace
+ 
++class HeadlessSelectFileDialog : public SelectFileDialog {
++ public:
++  HeadlessSelectFileDialog(Listener* listener,
++                           std::unique_ptr<SelectFilePolicy> policy,
++                           const std::string& mode)
++      : SelectFileDialog(listener, std::move(policy)),
++        mode_(mode) {}
++
++  bool IsRunning(gfx::NativeWindow owning_window) const override {
++    return false;
++  }
++  void ListenerDestroyed() override {
++    listener_ = nullptr;
++  }
++
++ protected:
++  void SelectFileImpl(
++      Type type,
++      const std::u16string& title,
++      const base::FilePath& default_path,
++      const FileTypeInfo* file_types,
++      int file_type_index,
++      const base::FilePath::StringType& default_extension,
++      gfx::NativeWindow owning_window,
++      const GURL* caller) override {
++    selected_path_ = default_path;
++    file_type_index_ = file_type_index;
++
++    VLOG(1) << "HeadlessSelectFileDialog:"
++            << " mode=" << mode_
++            << " type=" << type
++            << " path=" << default_path.value();
++
++    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
++        FROM_HERE,
++        base::BindOnce(&HeadlessSelectFileDialog::AutoTask,
++                       weak_factory_.GetWeakPtr()));
++  }
++
++  std::string mode_;
++  base::FilePath selected_path_;
++  int file_type_index_ = 0;
++  base::WeakPtrFactory<HeadlessSelectFileDialog> weak_factory_{this};
++
++ private:
++  bool HasMultipleFileTypeChoicesImpl() override {
++    return false;
++  }
++  virtual void AutoTask() = 0;
++};
++
++class AutoCancelSelectFileDialog : public HeadlessSelectFileDialog {
++ public:
++  AutoCancelSelectFileDialog(Listener* listener,
++                             std::unique_ptr<SelectFilePolicy> policy)
++      : HeadlessSelectFileDialog(listener, std::move(policy),
++                                 switches::kFileDialogModeAutoCancel) {}
++ private:
++  void AutoTask() override {
++    if (listener_)
++      listener_->FileSelectionCanceled();
++  }
++};
++
++class AutoAcceptSelectFileDialog : public HeadlessSelectFileDialog {
++ public:
++  AutoAcceptSelectFileDialog(Listener* listener,
++                             std::unique_ptr<SelectFilePolicy> policy)
++      : HeadlessSelectFileDialog(listener, std::move(policy),
++                                 switches::kFileDialogModeAutoAccept) {}
++ private:
++  void AutoTask() override {
++    if (!listener_)
++      return;
++    if (selected_path_.empty())
++      listener_->FileSelectionCanceled();
++    else
++      listener_->FileSelected(ui::SelectedFileInfo(selected_path_),
++                              file_type_index_);
++  }
++};
++
+ SelectFileDialog* CreateSelectFileDialog(
+     SelectFileDialog::Listener* listener,
+     std::unique_ptr<SelectFilePolicy> policy) {
+@@ -59,13 +160,21 @@ SelectFileDialog* CreateSelectFileDialog(
+   const LinuxUi* linux_ui = LinuxUi::instance();
+   switch (dialog_choice_) {
+     case kToolkit:
+-      if (!linux_ui)
+-        break;
+-      return linux_ui->CreateSelectFileDialog(listener, std::move(policy));
++      if (linux_ui) {
++        auto* dialog = linux_ui->CreateSelectFileDialog(listener, std::move(policy));
++        if (dialog)
++          return dialog;
++      }
++      LOG(WARNING) << "SelectFileDialog requested without native backend";
++      return new AutoCancelSelectFileDialog(listener, std::move(policy));
+ #if BUILDFLAG(USE_DBUS)
+     case kPortal:
+       return new SelectFileDialogLinuxPortal(listener, std::move(policy));
+ #endif
++    case kAutoCancel:
++      return new AutoCancelSelectFileDialog(listener, std::move(policy));
++    case kAutoAccept:
++      return new AutoAcceptSelectFileDialog(listener, std::move(policy));
+     case kUnknown:
+       NOTREACHED();
+   }
+-- 
+2.43.0
+

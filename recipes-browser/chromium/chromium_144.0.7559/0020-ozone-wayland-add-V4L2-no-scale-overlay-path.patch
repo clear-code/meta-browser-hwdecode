@@ -1,0 +1,1009 @@
+From c9e9f8f01737b5c3d280c63cd492b8ae92447202 Mon Sep 17 00:00:00 2001
+From: Takuro Ashie <ashie@clear-code.com>
+Date: Tue, 11 Aug 2026 18:13:12 +0900
+Subject: [PATCH 20/21] ozone/wayland: add V4L2 no-scale overlay path
+
+Add a V4L2NoScaleOverlay feature for RZ/G2L Wayland/Westonl deployments
+where V4L2 decoded NV12 dmabufs can be promoted to a KMS plane only
+when the video is displayed without scaling or cropping.
+
+The feature keeps no-scale NV12 overlay candidates alive during Viz
+prioritization, treats invalid NV12 dmabuf modifiers as LINEAR for
+import, promotes the NV12 Wayland overlay z-order, and makes Wayland
+overlay delegation active when V4L2NoScaleOverlay is enabled. Scaled or
+cropped NV12 candidates are rejected so they fall back to GPU
+composition instead of failing Weston atomic tests.
+
+The debug logs are rate-limited and gated by V4L2NoScaleOverlay.
+
+Upstream-Status: Inappropriate [RZ/G2L-specific V4L2/Weston overlay workaround]
+---
+ components/viz/service/BUILD.gn               |   1 +
+ .../display/overlay_candidate_factory.cc      | 162 +++++++++++++++++-
+ .../overlay_processor_using_strategy.cc       | 144 +++++++++++++++-
+ .../viz/service/display/skia_renderer.cc      |  27 ++-
+ ui/base/ui_base_features.cc                   |  35 ++++
+ ui/base/ui_base_features.h                    |  11 ++
+ ui/ozone/common/BUILD.gn                      |   1 +
+ ui/ozone/common/features.cc                   |   5 +-
+ .../wayland/gpu/gbm_pixmap_wayland.cc         |  86 +++++++++-
+ .../wayland/gpu/wayland_overlay_manager.cc    | 104 ++++++++++-
+ 10 files changed, 560 insertions(+), 16 deletions(-)
+
+diff --git a/components/viz/service/BUILD.gn b/components/viz/service/BUILD.gn
+index da33fa857f..5372fc3647 100644
+--- a/components/viz/service/BUILD.gn
++++ b/components/viz/service/BUILD.gn
+@@ -321,6 +321,7 @@ viz_component("service") {
+     "//skia:skcms",
+     "//third_party/blink/public/common",
+     "//third_party/libyuv",
++    "//ui/base:features",
+     "//ui/base:ozone_buildflags",
+     "//ui/display/types",
+     "//ui/gfx/animation",
+diff --git a/components/viz/service/display/overlay_candidate_factory.cc b/components/viz/service/display/overlay_candidate_factory.cc
+index c2801b58a2..55ee2d6576 100644
+--- a/components/viz/service/display/overlay_candidate_factory.cc
++++ b/components/viz/service/display/overlay_candidate_factory.cc
+@@ -7,6 +7,8 @@
+ #include <variant>
+ 
+ #include "base/containers/contains.h"
++#include "base/feature_list.h"
++#include "base/logging.h"
+ #include "build/build_config.h"
+ #include "cc/base/math_util.h"
+ #include "components/viz/common/quads/aggregated_render_pass_draw_quad.h"
+@@ -21,6 +23,7 @@
+ #include "components/viz/service/debugger/viz_debugger.h"
+ #include "components/viz/service/display/display_resource_provider.h"
+ #include "third_party/skia/include/core/SkColor.h"
++#include "ui/base/ui_base_features.h"
+ #include "ui/gfx/geometry/rect.h"
+ #include "ui/gfx/geometry/rect_conversions.h"
+ #include "ui/gfx/geometry/rect_f.h"
+@@ -33,6 +36,8 @@ namespace viz {
+ 
+ namespace {
+ 
++constexpr int kOverlayDebugLogLimit = 4;
++
+ const SharedImageFormat kOverlayFormats[] = {
+     SinglePlaneFormat::kRGBX_8888, SinglePlaneFormat::kRGBA_8888,
+     SinglePlaneFormat::kBGRX_8888, SinglePlaneFormat::kBGRA_8888,
+@@ -133,6 +138,101 @@ bool RequiresBlendingForReasonOtherThanRoundedCorners(const DrawQuad* quad) {
+          quad->shared_quad_state->mask_filter_info.HasGradientMask();
+ }
+ 
++const char* CandidateStatusToString(OverlayCandidate::CandidateStatus status) {
++  switch (status) {
++    case OverlayCandidate::CandidateStatus::kSuccess:
++      return "kSuccess";
++    case OverlayCandidate::CandidateStatus::kFailNotOverlay:
++      return "kFailNotOverlay";
++    case OverlayCandidate::CandidateStatus::kFailNotAxisAligned:
++      return "kFailNotAxisAligned";
++    case OverlayCandidate::CandidateStatus::kFailNotAxisAligned3dTransform:
++      return "kFailNotAxisAligned3dTransform";
++    case OverlayCandidate::CandidateStatus::kFailNotAxisAligned2dShear:
++      return "kFailNotAxisAligned2dShear";
++    case OverlayCandidate::CandidateStatus::kFailNotAxisAligned2dRotation:
++      return "kFailNotAxisAligned2dRotation";
++    case OverlayCandidate::CandidateStatus::kFailColorMatrix:
++      return "kFailColorMatrix";
++    case OverlayCandidate::CandidateStatus::kFailOpacity:
++      return "kFailOpacity";
++    case OverlayCandidate::CandidateStatus::kFailBlending:
++      return "kFailBlending";
++    case OverlayCandidate::CandidateStatus::kFailQuadNotSupported:
++      return "kFailQuadNotSupported";
++    case OverlayCandidate::CandidateStatus::kFailVisible:
++      return "kFailVisible";
++    case OverlayCandidate::CandidateStatus::kFailBufferFormat:
++      return "kFailBufferFormat";
++    case OverlayCandidate::CandidateStatus::kFailNearFilter:
++      return "kFailNearFilter";
++    case OverlayCandidate::CandidateStatus::kFailPriority:
++      return "kFailPriority";
++    case OverlayCandidate::CandidateStatus::kFailRoundedDisplayMasksNotSupported:
++      return "kFailRoundedDisplayMasksNotSupported";
++    case OverlayCandidate::CandidateStatus::kFailMaskFilterNotSupported:
++      return "kFailMaskFilterNotSupported";
++    case OverlayCandidate::CandidateStatus::kFailHasTransformButCantClip:
++      return "kFailHasTransformButCantClip";
++    case OverlayCandidate::CandidateStatus::kFailRpdqWithTransform:
++      return "kFailRpdqWithTransform";
++  }
++  return "UNKNOWN";
++}
++
++bool IsVideoTextureQuad(const DrawQuad* quad) {
++  return quad->material == DrawQuad::Material::kTextureContent &&
++         TextureDrawQuad::MaterialCast(quad)->is_video_frame;
++}
++
++bool ShouldLogVideoOverlayDebug() {
++  if (!base::FeatureList::IsEnabled(::features::kV4L2NoScaleOverlay)) {
++    return false;
++  }
++  static int log_count = 0;
++  return log_count++ < kOverlayDebugLogLimit;
++}
++
++void LogVideoCandidate(const char* stage,
++                       const DrawQuad* quad,
++                       OverlayCandidate::CandidateStatus status,
++                       const OverlayCandidate* candidate = nullptr,
++                       ResourceId resource_id = kInvalidResourceId) {
++  if (!IsVideoTextureQuad(quad) || !ShouldLogVideoOverlayDebug()) {
++    return;
++  }
++
++  const SharedQuadState* sqs = quad->shared_quad_state;
++  VLOG(1) << "[V4L-GST-OVERLAY] VIZ_VIDEO_CANDIDATE"
++             << " stage=" << stage
++             << " status=" << CandidateStatusToString(status)
++             << " resource_id=" << resource_id.GetUnsafeValue()
++             << " quad_rect=" << quad->rect.ToString()
++             << " visible_rect=" << quad->visible_rect.ToString()
++             << " sqs_opacity=" << sqs->opacity
++             << " sqs_blend_mode=" << static_cast<int>(sqs->blend_mode)
++             << " sqs_clip_rect="
++             << (sqs->clip_rect ? sqs->clip_rect->ToString() : "none")
++             << " candidate_format="
++             << (candidate ? candidate->format.ToString() : "none")
++             << " resource_size="
++             << (candidate ? candidate->resource_size_in_pixels.ToString()
++                           : "none")
++             << " display_rect="
++             << (candidate ? candidate->display_rect.ToString() : "none")
++             << " uv_rect="
++             << (candidate ? candidate->uv_rect.ToString() : "none")
++             << " clip_rect="
++             << (candidate && candidate->clip_rect
++                     ? candidate->clip_rect->ToString()
++                     : "none")
++             << " is_opaque=" << (candidate ? candidate->is_opaque : false)
++             << " requires_overlay="
++             << (candidate ? candidate->requires_overlay : false)
++             << " priority_hint="
++             << (candidate ? static_cast<int>(candidate->priority_hint) : -1);
++}
++
+ }  // namespace
+ 
+ OverlayCandidateFactory::OverlayContext::OverlayContext() = default;
+@@ -146,6 +246,8 @@ OverlayCandidate::CandidateStatus OverlayCandidateFactory::FromDrawQuad(
+   // overlay plane.
+   // TODO(https://crbug.com/792757): Remove this check once the bug is resolved.
+   if (has_custom_color_matrix_) {
++    LogVideoCandidate("from_draw_quad_color_matrix_reject", quad,
++                      CandidateStatus::kFailColorMatrix);
+     return CandidateStatus::kFailColorMatrix;
+   }
+ 
+@@ -156,6 +258,8 @@ OverlayCandidate::CandidateStatus OverlayCandidateFactory::FromDrawQuad(
+   // their final output buffers.
+   if (!context_.is_delegated_context &&
+       !cc::MathUtil::IsWithinEpsilon(sqs->opacity, 1.0f)) {
++    LogVideoCandidate("from_draw_quad_opacity_reject", quad,
++                      CandidateStatus::kFailOpacity);
+     return CandidateStatus::kFailOpacity;
+   }
+   candidate.opacity = sqs->opacity;
+@@ -163,10 +267,14 @@ OverlayCandidate::CandidateStatus OverlayCandidateFactory::FromDrawQuad(
+   // We support only kSrc (no blending) and kSrcOver (blending with premul).
+   if (!(sqs->blend_mode == SkBlendMode::kSrc ||
+         sqs->blend_mode == SkBlendMode::kSrcOver)) {
++    LogVideoCandidate("from_draw_quad_blend_reject", quad,
++                      CandidateStatus::kFailBlending);
+     return CandidateStatus::kFailBlending;
+   }
+ 
+   if (sqs->mask_filter_info.HasGradientMask()) {
++    LogVideoCandidate("from_draw_quad_gradient_mask_reject", quad,
++                      CandidateStatus::kFailMaskFilterNotSupported);
+     return CandidateStatus::kFailMaskFilterNotSupported;
+   }
+ 
+@@ -204,6 +312,8 @@ OverlayCandidate::CandidateStatus OverlayCandidateFactory::FromDrawQuad(
+       break;
+   }
+ 
++  LogVideoCandidate("from_draw_quad_result", quad, status, &candidate,
++                    candidate.resource_id);
+   return status;
+ }
+ 
+@@ -340,11 +450,35 @@ OverlayCandidate::CandidateStatus OverlayCandidateFactory::FromDrawQuadResource(
+     OverlayCandidate& candidate) const {
+   if (resource_id != kInvalidResourceId &&
+       !resource_provider_->IsOverlayCandidate(resource_id)) {
++    LogVideoCandidate("resource_not_overlay_candidate", quad,
++                      CandidateStatus::kFailNotOverlay, &candidate,
++                      resource_id);
++    if (IsVideoTextureQuad(quad) && ShouldLogVideoOverlayDebug()) {
++      VLOG(1) << "[V4L-GST-OVERLAY] VIZ_RESOURCE_NOT_OVERLAY"
++                 << " resource_id=" << resource_id.GetUnsafeValue()
++                 << " actual_format="
++                 << resource_provider_->GetSharedImageFormat(resource_id)
++                        .ToString()
++                 << " actual_size="
++                 << resource_provider_->GetResourceBackedSize(resource_id)
++                        .ToString()
++                 << " is_overlay_candidate="
++                 << resource_provider_->IsOverlayCandidate(resource_id)
++                 << " is_low_latency="
++                 << resource_provider_->IsLowLatencyRendering(resource_id)
++                 << " needs_detiling="
++                 << resource_provider_->GetNeedsDetiling(resource_id)
++                 << " quad_rect=" << quad->rect.ToString()
++                 << " visible_rect=" << quad->visible_rect.ToString();
++    }
+     return CandidateStatus::kFailNotOverlay;
+   }
+ 
+-  if (quad->visible_rect.IsEmpty())
++  if (quad->visible_rect.IsEmpty()) {
++    LogVideoCandidate("empty_visible_rect", quad, CandidateStatus::kFailVisible,
++                      &candidate, resource_id);
+     return CandidateStatus::kFailVisible;
++  }
+ 
+   if (resource_id != kInvalidResourceId) {
+     candidate.format = resource_provider_->GetSharedImageFormat(resource_id);
+@@ -357,6 +491,9 @@ OverlayCandidate::CandidateStatus OverlayCandidateFactory::FromDrawQuadResource(
+ 
+     if (!context_.is_delegated_context &&
+         !base::Contains(kOverlayFormats, candidate.format)) {
++      LogVideoCandidate("unsupported_buffer_format", quad,
++                        CandidateStatus::kFailBufferFormat, &candidate,
++                        resource_id);
+       return CandidateStatus::kFailBufferFormat;
+     }
+   }
+@@ -368,6 +505,8 @@ OverlayCandidate::CandidateStatus OverlayCandidateFactory::FromDrawQuadResource(
+   if (auto status =
+           ApplyTransform(sqs->quad_to_target_transform, y_flipped, candidate);
+       status != CandidateStatus::kSuccess) {
++    LogVideoCandidate("transform_reject", quad, status, &candidate,
++                      resource_id);
+     return status;
+   }
+ 
+@@ -431,18 +570,26 @@ OverlayCandidate::CandidateStatus OverlayCandidateFactory::FromDrawQuadResource(
+       if (candidate.clip_rect.has_value() &&
+           !OverlayCandidate::DisplayRectInTargetSpace(candidate).Intersects(
+               gfx::RectF(*candidate.clip_rect))) {
++        LogVideoCandidate("clip_invisible", quad,
++                          CandidateStatus::kFailVisible, &candidate,
++                          resource_id);
+         return CandidateStatus::kFailVisible;
+       }
+     } else {
+       // Clipping is applied after transforms, so we can't delegate transforms
+       // if we can't delegate clipping.
+       if (std::holds_alternative<gfx::Transform>(candidate.transform)) {
++        LogVideoCandidate("transform_but_cant_clip", quad,
++                          CandidateStatus::kFailHasTransformButCantClip,
++                          &candidate, resource_id);
+         return CandidateStatus::kFailHasTransformButCantClip;
+       }
+ 
+       // Apply clipping to the |display_rect| and |uv_rect| directly.
+       auto status = DoGeometricClipping(quad, candidate);
+       if (status != CandidateStatus::kSuccess) {
++        LogVideoCandidate("geometric_clipping_reject", quad, status,
++                          &candidate, resource_id);
+         return status;
+       }
+     }
+@@ -455,11 +602,16 @@ OverlayCandidate::CandidateStatus OverlayCandidateFactory::FromDrawQuadResource(
+   if (context_.disable_wire_size_optimization ||
+       ShouldApplyRoundedCorner(candidate, quad)) {
+     if (!context_.supports_mask_filter) {
++      LogVideoCandidate("mask_filter_not_supported", quad,
++                        CandidateStatus::kFailMaskFilterNotSupported,
++                        &candidate, resource_id);
+       return CandidateStatus::kFailMaskFilterNotSupported;
+     }
+     candidate.rounded_corners = sqs->mask_filter_info.rounded_corner_bounds();
+   }
+ 
++  LogVideoCandidate("resource_accept", quad, CandidateStatus::kSuccess,
++                    &candidate, resource_id);
+   return CandidateStatus::kSuccess;
+ }
+ 
+@@ -627,10 +779,18 @@ OverlayCandidate::CandidateStatus OverlayCandidateFactory::FromTileQuad(
+ OverlayCandidate::CandidateStatus OverlayCandidateFactory::FromTextureQuad(
+     const TextureDrawQuad* quad,
+     OverlayCandidate& candidate) const {
++  if (quad->is_video_frame) {
++    LogVideoCandidate("texture_quad_start", quad, CandidateStatus::kSuccess,
++                      &candidate, quad->resource_id);
++  }
++
+   if (!context_.is_delegated_context &&
+       quad->overlay_priority_hint == OverlayPriority::kLow) {
+     // For current implementation low priority means this does not promote to
+     // overlay.
++    LogVideoCandidate("texture_low_priority_reject", quad,
++                      CandidateStatus::kFailPriority, &candidate,
++                      quad->resource_id);
+     return CandidateStatus::kFailPriority;
+   }
+ 
+diff --git a/components/viz/service/display/overlay_processor_using_strategy.cc b/components/viz/service/display/overlay_processor_using_strategy.cc
+index 385ddbdb97..4c545615a9 100644
+--- a/components/viz/service/display/overlay_processor_using_strategy.cc
++++ b/components/viz/service/display/overlay_processor_using_strategy.cc
+@@ -40,6 +40,7 @@
+ #include "components/viz/service/display/overlay_proposed_candidate.h"
+ #include "components/viz/service/display/overlay_strategy_single_on_top.h"
+ #include "components/viz/service/display/overlay_strategy_underlay.h"
++#include "ui/base/ui_base_features.h"
+ #include "ui/gfx/geometry/rect.h"
+ #include "ui/gfx/geometry/rect_conversions.h"
+ #include "ui/gfx/geometry/transform.h"
+@@ -47,6 +48,56 @@
+ namespace viz {
+ namespace {
+ 
++constexpr int kV4lGstOverlayPromoteLogLimit = 4;
++constexpr int kV4lGstOverlaySortLogLimit = 8;
++
++bool IsV4L2NoScaleOverlayEnabled() {
++  return base::FeatureList::IsEnabled(::features::kV4L2NoScaleOverlay);
++}
++
++bool ShouldLogV4lGstOverlayPromoteDebug() {
++  if (!IsV4L2NoScaleOverlayEnabled()) {
++    return false;
++  }
++  static int log_count = 0;
++  return log_count++ < kV4lGstOverlayPromoteLogLimit;
++}
++
++bool ShouldLogV4lGstOverlaySortDebug(bool interesting) {
++  if (!interesting || !IsV4L2NoScaleOverlayEnabled()) {
++    return false;
++  }
++  static int log_count = 0;
++  return log_count++ < kV4lGstOverlaySortLogLimit;
++}
++
++bool IsV4lGstOverlayVideoCandidate(const OverlayCandidate& candidate) {
++  return candidate.format.is_multi_plane() &&
++         candidate.format.plane_config() ==
++             SharedImageFormat::PlaneConfig::kY_UV &&
++         candidate.format.subsampling() ==
++             SharedImageFormat::Subsampling::k420 &&
++         candidate.format.channel_format() ==
++             SharedImageFormat::ChannelFormat::k8;
++}
++
++const char* OverlayStrategyName(OverlayStrategy strategy) {
++  switch (strategy) {
++    case OverlayStrategy::kFullscreen:
++      return "Fullscreen";
++    case OverlayStrategy::kSingleOnTop:
++      return "SingleOnTop";
++    case OverlayStrategy::kUnderlay:
++      return "Underlay";
++#if BUILDFLAG(ENABLE_CAST_OVERLAY_STRATEGY)
++    case OverlayStrategy::kUnderlayCast:
++      return "UnderlayCast";
++#endif
++    default:
++      return "Other";
++  }
++}
++
+ // These values are persisted to logs. Entries should not be renumbered and
+ // numeric values should never be reused.
+ // Used by UMA histogram that tells us if we're attempting multiple overlays,
+@@ -700,6 +751,10 @@ void OverlayProcessorUsingStrategy::SortProposedOverlayCandidates(
+         ((track_data.IsActivelyChanging(frame_sequence_number_) ||
+           !prioritization_config_.changing_threshold) &&
+          (power_gained >= 0 || !prioritization_config_.damage_rate_threshold));
++    const bool is_v4l_gst_video_candidate =
++        IsV4lGstOverlayVideoCandidate(it->candidate);
++    const bool force_v4l_gst_video_candidate =
++        is_v4l_gst_video_candidate && IsV4L2NoScaleOverlayEnabled();
+ 
+     // Candidates that have rounded-display mask textures must be promoted
+     // even though they do not pass the minimum threshold.
+@@ -707,9 +762,40 @@ void OverlayProcessorUsingStrategy::SortProposedOverlayCandidates(
+     // changing corner radii with each frame!) But given the requirement that
+     // these mask textures must be on top of for UI, we need to promote these
+     // textures for correctness.
+-    if (it->candidate.requires_overlay ||
+-        it->candidate.has_rounded_display_masks || passes_min_threshold) {
+-      it->relative_power_gain = power_gained;
++    const bool keep_candidate =
++        it->candidate.requires_overlay ||
++        it->candidate.has_rounded_display_masks || passes_min_threshold ||
++        force_v4l_gst_video_candidate;
++    const bool interesting_sort_log =
++        is_v4l_gst_video_candidate &&
++        (!passes_min_threshold || force_v4l_gst_video_candidate);
++
++    if (is_v4l_gst_video_candidate &&
++        ShouldLogV4lGstOverlaySortDebug(interesting_sort_log)) {
++      VLOG(1) << "[V4L-GST-OVERLAY] OVERLAY_SORT"
++                 << " frame_sequence=" << frame_sequence_number_
++                 << " resource_id=" << it->candidate.resource_id
++                 << " strategy="
++                 << OverlayStrategyName(it->strategy->GetUMAEnum())
++                 << " format=" << it->candidate.format.ToString()
++                 << " resource_size="
++                 << it->candidate.resource_size_in_pixels.ToString()
++                 << " display_rect=" << it->candidate.display_rect.ToString()
++                 << " damage_area_estimate="
++                 << it->candidate.damage_area_estimate
++                 << " display_area=" << display_area
++                 << " actively_changing="
++                 << track_data.IsActivelyChanging(frame_sequence_number_)
++                 << " power_gained=" << power_gained
++                 << " passes_min_threshold=" << passes_min_threshold
++                 << " force=" << force_v4l_gst_video_candidate
++                 << " action=" << (keep_candidate ? "keep" : "drop");
++    }
++
++    if (keep_candidate) {
++      it->relative_power_gain =
++          force_v4l_gst_video_candidate ? std::max(power_gained, 0)
++                                        : power_gained;
+       ++it;
+     } else {
+       // We erase this candidate from |proposed_candidates| in this frame rather
+@@ -831,6 +917,26 @@ bool OverlayProcessorUsingStrategy::AttemptWithStrategies(
+       has_required_overlay = true;
+     }
+ 
++    if (IsV4lGstOverlayVideoCandidate(candidate.candidate) &&
++        ShouldLogV4lGstOverlayPromoteDebug()) {
++      VLOG(1) << "[V4L-GST-OVERLAY] OVERLAY_ATTEMPT"
++                 << " frame_sequence=" << frame_sequence_number_
++                 << " strategy="
++                 << OverlayStrategyName(candidate.strategy->GetUMAEnum())
++                 << " resource_id=" << candidate.candidate.resource_id
++                 << " format=" << candidate.candidate.format.ToString()
++                 << " resource_size="
++                 << candidate.candidate.resource_size_in_pixels.ToString()
++                 << " display_rect="
++                 << candidate.candidate.display_rect.ToString()
++                 << " uv_rect=" << candidate.candidate.uv_rect.ToString()
++                 << " z_order=" << candidate.candidate.plane_z_order
++                 << " requires_overlay="
++                 << candidate.candidate.requires_overlay
++                 << " priority_hint="
++                 << static_cast<int>(candidate.candidate.priority_hint);
++    }
++
+     bool used_overlay = candidate.strategy->Attempt(
+         output_color_matrix, render_pass_filters, render_pass_backdrop_filters,
+         resource_provider, render_pass_list, surface_damage_rect_list,
+@@ -875,6 +981,22 @@ bool OverlayProcessorUsingStrategy::AttemptWithStrategies(
+     }
+ 
+     if (used_overlay) {
++      if (IsV4lGstOverlayVideoCandidate(candidate.candidate) &&
++          ShouldLogV4lGstOverlayPromoteDebug()) {
++        VLOG(1) << "[V4L-GST-OVERLAY] OVERLAY_PROMOTED"
++                   << " frame_sequence=" << frame_sequence_number_
++                   << " strategy="
++                   << OverlayStrategyName(candidate.strategy->GetUMAEnum())
++                   << " resource_id=" << candidate.candidate.resource_id
++                   << " format=" << candidate.candidate.format.ToString()
++                   << " resource_size="
++                   << candidate.candidate.resource_size_in_pixels.ToString()
++                   << " display_rect="
++                   << candidate.candidate.display_rect.ToString()
++                   << " uv_rect=" << candidate.candidate.uv_rect.ToString()
++                   << " z_order=" << candidate.candidate.plane_z_order
++                   << " candidate_count=" << candidates->size();
++      }
+       // This function is used by underlay strategy to mark the primary plane as
+       // enable_blending.
+       candidate.strategy->AdjustOutputSurfaceOverlay(primary_plane);
+@@ -1096,6 +1218,22 @@ bool OverlayProcessorUsingStrategy::AttemptMultipleOverlays(
+             });
+   // Commit successful candidates.
+   for (auto& test_candidate : test_candidates) {
++    if (IsV4lGstOverlayVideoCandidate(test_candidate.candidate) &&
++        ShouldLogV4lGstOverlayPromoteDebug()) {
++      VLOG(1) << "[V4L-GST-OVERLAY] OVERLAY_PROMOTED_MULTIPLE"
++                 << " frame_sequence=" << frame_sequence_number_
++                 << " strategy="
++                 << OverlayStrategyName(test_candidate.strategy->GetUMAEnum())
++                 << " resource_id=" << test_candidate.candidate.resource_id
++                 << " format=" << test_candidate.candidate.format.ToString()
++                 << " resource_size="
++                 << test_candidate.candidate.resource_size_in_pixels.ToString()
++                 << " display_rect="
++                 << test_candidate.candidate.display_rect.ToString()
++                 << " uv_rect=" << test_candidate.candidate.uv_rect.ToString()
++                 << " z_order=" << test_candidate.candidate.plane_z_order
++                 << " candidate_count=" << candidates.size();
++    }
+     test_candidate.strategy->CommitCandidate(test_candidate, render_pass);
+     LogStrategyEnumUMA(test_candidate.strategy->GetUMAEnum());
+   }
+diff --git a/components/viz/service/display/skia_renderer.cc b/components/viz/service/display/skia_renderer.cc
+index f94826fe8d..77ee810b73 100644
+--- a/components/viz/service/display/skia_renderer.cc
++++ b/components/viz/service/display/skia_renderer.cc
+@@ -13,7 +13,6 @@
+ #include <variant>
+ 
+ #include "base/auto_reset.h"
+-#include "base/command_line.h"
+ #include "base/debug/crash_logging.h"
+ #include "base/debug/dump_without_crashing.h"
+ #include "base/feature_list.h"
+@@ -113,6 +112,16 @@ namespace viz {
+ 
+ namespace {
+ 
++constexpr int kV4lGstOverlayRendererLogLimit = 4;
++
++bool ShouldLogV4lGstOverlayRendererDebug() {
++  if (!base::FeatureList::IsEnabled(::features::kV4L2NoScaleOverlay)) {
++    return false;
++  }
++  static int log_count = 0;
++  return log_count++ < kV4lGstOverlayRendererLogLimit;
++}
++
+ // Feature to temporarily create a dump in the case where we try and sample from
+ // a render pass that has never been drawn to.
+ // See: crbug.com/344458294, crbug.com/345673794
+@@ -2587,6 +2596,22 @@ void SkiaRenderer::DrawTextureQuad(const TextureDrawQuad* quad,
+   TRACE_EVENT0(TRACE_DISABLED_BY_DEFAULT("viz.quads"),
+                "SkiaRenderer::DrawTextureQuad");
+ 
++  if (quad->is_video_frame) {
++    const SharedImageFormat format =
++        resource_provider()->GetSharedImageFormat(quad->resource_id);
++    const bool is_overlay_candidate =
++        resource_provider()->IsOverlayCandidate(quad->resource_id);
++    if (ShouldLogV4lGstOverlayRendererDebug()) {
++      VLOG(1) << "[V4L-GST-OVERLAY] SKIA_DRAW_VIDEO_TEXTURE"
++                 << " resource_id=" << quad->resource_id
++                 << " format=" << format.ToString()
++                 << " is_overlay_candidate=" << is_overlay_candidate
++                 << " rect=" << quad->rect.ToString()
++                 << " visible_rect=" << quad->visible_rect.ToString()
++                 << " needs_blending=" << quad->needs_blending;
++    }
++  }
++
+   // Sometimes we use different color space for overlays to make sure we stay on
+   // hardware path for power efficiency even if it's slightly incorrect. To
+   // avoid color changes during promotion we use the same color space for
+diff --git a/ui/base/ui_base_features.cc b/ui/base/ui_base_features.cc
+index 741a2fe5f0..d454c8bafc 100644
+--- a/ui/base/ui_base_features.cc
++++ b/ui/base/ui_base_features.cc
+@@ -129,6 +129,41 @@ BASE_FEATURE(kWaylandTextInputV3, base::FEATURE_ENABLED_BY_DEFAULT);
+ BASE_FEATURE(kWaylandSessionManagement, base::FEATURE_DISABLED_BY_DEFAULT);
+ #endif  // BUILDFLAG(IS_OZONE)
+ 
++// Allows no-scale V4L2 NV12 video buffers to be delegated as Wayland overlays.
++BASE_FEATURE(kV4L2NoScaleOverlay,
++             "V4L2NoScaleOverlay",
++             base::FEATURE_DISABLED_BY_DEFAULT);
++
++#if BUILDFLAG(IS_LINUX)
++// If this feature is enabled, users not specify --ozone-platform-hint switch
++// will get --ozone-platform-hint=auto treatment. https://crbug.com/40250220.
++COMPONENT_EXPORT(UI_BASE_FEATURES)
++BASE_FEATURE(kOverrideDefaultOzonePlatformHintToAuto,
++             "OverrideDefaultOzonePlatformHintToAuto",
++             base::FEATURE_DISABLED_BY_DEFAULT);
++#endif  // BUILDFLAG(IS_LINUX)
++
++// Chrome for Linux should eventually use XInput2 key events.
++// See https://crbug.com/412608405 for context.
++BASE_FEATURE(kXInput2KeyEvents,
++             "XInput2KeyEvents",
++             base::FEATURE_DISABLED_BY_DEFAULT);
++
++// Update of the virtual keyboard settings UI as described in
++// https://crbug.com/876901.
++BASE_FEATURE(kInputMethodSettingsUiUpdate,
++             "InputMethodSettingsUiUpdate",
++             base::FEATURE_DISABLED_BY_DEFAULT);
++
++// Uses a stylus-specific tap slop region parameter for gestures.  Stylus taps
++// tend to slip more than touch taps (presumably because the user doesn't feel
++// the movement friction with a stylus).  As a result, it is harder to tap with
++// a stylus. This feature makes the slop region for stylus input bigger than the
++// touch slop.
++BASE_FEATURE(kStylusSpecificTapSlop,
++             "StylusSpecificTapSlop",
++             base::FEATURE_ENABLED_BY_DEFAULT);
++
+ // When enabled, the feature will query the OS for a default cursor size,
+ // to be used in determining the concrete object size of a custom cursor in
+ // blink. Currently enabled by default on Windows only.
+diff --git a/ui/base/ui_base_features.h b/ui/base/ui_base_features.h
+index ce95225cbf..a8a46feaa8 100644
+--- a/ui/base/ui_base_features.h
++++ b/ui/base/ui_base_features.h
+@@ -133,6 +133,17 @@ COMPONENT_EXPORT(UI_BASE_FEATURES)
+ BASE_DECLARE_FEATURE(kWaylandSessionManagement);
+ #endif  // BUILDFLAG(IS_OZONE)
+ 
++COMPONENT_EXPORT(UI_BASE_FEATURES)
++BASE_DECLARE_FEATURE(kV4L2NoScaleOverlay);
++
++#if BUILDFLAG(IS_LINUX)
++COMPONENT_EXPORT(UI_BASE_FEATURES)
++BASE_DECLARE_FEATURE(kOverrideDefaultOzonePlatformHintToAuto);
++#endif  // BUILDFLAG(IS_LINUX)
++
++COMPONENT_EXPORT(UI_BASE_FEATURES)
++BASE_DECLARE_FEATURE(kXInput2KeyEvents);
++
+ // Indicates whether DrmOverlayManager should used the synchronous API to
+ // perform pageflip tests.
+ COMPONENT_EXPORT(UI_BASE_FEATURES)
+diff --git a/ui/ozone/common/BUILD.gn b/ui/ozone/common/BUILD.gn
+index cae027afd6..f14c11fd10 100644
+--- a/ui/ozone/common/BUILD.gn
++++ b/ui/ozone/common/BUILD.gn
+@@ -39,6 +39,7 @@ source_set("common") {
+ 
+   deps = [
+     "//components/viz/common/resources:shared_image_format",
++    "//ui/base:features",
+     "//ui/gfx/ipc/color",
+     "//ui/gl",
+     "//ui/gl:buildflags",
+diff --git a/ui/ozone/common/features.cc b/ui/ozone/common/features.cc
+index 40e9418f6a..a007a4b32a 100644
+--- a/ui/ozone/common/features.cc
++++ b/ui/ozone/common/features.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "ui/ozone/common/features.h"
+ 
++#include "ui/base/ui_base_features.h"
++
+ namespace ui {
+ 
+ // Overlay delegation is required for delegated compositing. This doesn't enable
+@@ -44,7 +46,8 @@ BASE_FEATURE(kDispatchTouchEventsOnFrameEvent,
+              base::FEATURE_DISABLED_BY_DEFAULT);
+ 
+ bool IsWaylandOverlayDelegationEnabled() {
+-  return base::FeatureList::IsEnabled(kWaylandOverlayDelegation);
++  return base::FeatureList::IsEnabled(kWaylandOverlayDelegation) ||
++         base::FeatureList::IsEnabled(::features::kV4L2NoScaleOverlay);
+ }
+ 
+ bool IsWaylandFractionalScaleV1Enabled() {
+diff --git a/ui/ozone/platform/wayland/gpu/gbm_pixmap_wayland.cc b/ui/ozone/platform/wayland/gpu/gbm_pixmap_wayland.cc
+index 24eefcf51a..9325214758 100644
+--- a/ui/ozone/platform/wayland/gpu/gbm_pixmap_wayland.cc
++++ b/ui/ozone/platform/wayland/gpu/gbm_pixmap_wayland.cc
+@@ -11,9 +11,11 @@
+ #include <memory>
+ 
+ #include "base/files/platform_file.h"
++#include "base/feature_list.h"
+ #include "base/logging.h"
+ #include "base/posix/eintr_wrapper.h"
+ #include "base/trace_event/trace_event.h"
++#include "ui/base/ui_base_features.h"
+ #include "ui/gfx/buffer_format_util.h"
+ #include "ui/gfx/buffer_usage_util.h"
+ #include "ui/gfx/geometry/size_conversions.h"
+@@ -29,6 +31,34 @@
+ 
+ namespace ui {
+ 
++namespace {
++
++constexpr int kOverlayDebugLogLimit = 4;
++
++uint64_t GetEffectiveModifierForDmabuf(uint32_t fourcc_format,
++                                       uint64_t modifier) {
++  if (fourcc_format == DRM_FORMAT_NV12 &&
++      modifier == DRM_FORMAT_MOD_INVALID) {
++    return DRM_FORMAT_MOD_LINEAR;
++  }
++
++  return modifier;
++}
++
++bool IsV4L2NoScaleOverlayEnabled() {
++  return base::FeatureList::IsEnabled(::features::kV4L2NoScaleOverlay);
++}
++
++bool ShouldLogOverlayDebug() {
++  if (!IsV4L2NoScaleOverlayEnabled()) {
++    return false;
++  }
++  static int log_count = 0;
++  return log_count++ < kOverlayDebugLogLimit;
++}
++
++}  // namespace
++
+ GbmPixmapWayland::GbmPixmapWayland(WaylandBufferManagerGpu* buffer_manager)
+     : buffer_manager_(buffer_manager),
+       buffer_id_(buffer_manager->AllocateBufferID()) {}
+@@ -182,10 +212,40 @@ bool GbmPixmapWayland::ScheduleOverlayPlane(
+     std::vector<gfx::GpuFence> release_fences) {
+   DCHECK_NE(widget, gfx::kNullAcceleratedWidget);
+ 
+-  if (!created_wl_buffer_) {
+-    CreateDmabufBasedWlBuffer(overlay_plane_data);
++  gfx::OverlayPlaneData effective_overlay_plane_data = overlay_plane_data;
++  const bool is_nv12_overlay =
++      GetSharedImageFormat() == viz::MultiPlaneFormat::kNV12;
++  if (is_nv12_overlay && IsV4L2NoScaleOverlayEnabled() &&
++      effective_overlay_plane_data.z_order < 1) {
++    effective_overlay_plane_data.z_order = 1;
+   }
+ 
++  if (is_nv12_overlay && ShouldLogOverlayDebug()) {
++    VLOG(1) << "[V4L-GST-OVERLAY] WAYLAND_SCHEDULE_NV12"
++               << " buffer_id=" << buffer_id_
++               << " buffer_size=" << GetBufferSize().ToString()
++               << " visible_size=" << visible_area_size_.ToString()
++               << " original_z_order=" << overlay_plane_data.z_order
++               << " effective_z_order=" << effective_overlay_plane_data.z_order
++               << " display_bounds="
++               << effective_overlay_plane_data.display_bounds.ToString()
++               << " crop_rect="
++               << effective_overlay_plane_data.crop_rect.ToString()
++               << " damage_rect="
++               << effective_overlay_plane_data.damage_rect.ToString()
++               << " clip_rect="
++               << (effective_overlay_plane_data.clip_rect
++                       ? effective_overlay_plane_data.clip_rect->ToString()
++                       : "none")
++               << " blend=" << effective_overlay_plane_data.enable_blend
++               << " opacity=" << effective_overlay_plane_data.opacity
++               << " priority_hint="
++               << static_cast<int>(effective_overlay_plane_data.priority_hint);
++  }
++
++  if (!created_wl_buffer_)
++    CreateDmabufBasedWlBuffer(effective_overlay_plane_data);
++
+   widget_ = widget;
+ 
+   auto* surface = buffer_manager_->GetSurface(widget);
+@@ -197,7 +257,7 @@ bool GbmPixmapWayland::ScheduleOverlayPlane(
+ 
+   DCHECK(acquire_fences.empty() || acquire_fences.size() == 1u);
+   surfaceless->QueueWaylandOverlayConfig(
+-      {overlay_plane_data,
++      {effective_overlay_plane_data,
+        acquire_fences.empty()
+            ? nullptr
+            : std::make_unique<gfx::GpuFence>(std::move(acquire_fences[0])),
+@@ -223,13 +283,27 @@ gfx::NativePixmapHandle GbmPixmapWayland::ExportHandle() const {
+                                gbm_bo_->GetPlaneSize(i),
+                                std::move(scoped_fds[i]));
+   }
+-  handle.modifier = GetBufferFormatModifier();
++  handle.modifier =
++      GetEffectiveModifierForDmabuf(gbm_bo_->GetFormat(),
++                                    GetBufferFormatModifier());
+   return handle;
+ }
+ 
+ void GbmPixmapWayland::CreateDmabufBasedWlBuffer(
+     const gfx::OverlayPlaneData& overlay_plane_data) {
+-  uint64_t modifier = gbm_bo_->GetFormatModifier();
++  const uint32_t format = gbm_bo_->GetFormat();
++  const uint64_t original_modifier = gbm_bo_->GetFormatModifier();
++  const uint64_t modifier =
++      GetEffectiveModifierForDmabuf(format, original_modifier);
++
++  if (format == DRM_FORMAT_NV12 && ShouldLogOverlayDebug()) {
++    VLOG(1) << "[V4L-GST-OVERLAY] WAYLAND_CREATE_DMABUF_NV12"
++               << " buffer_id=" << buffer_id_
++               << " size=" << visible_area_size_.ToString()
++               << " plane_count=" << gbm_bo_->GetNumPlanes()
++               << " original_modifier=" << original_modifier
++               << " effective_modifier=" << modifier;
++  }
+ 
+   std::vector<uint32_t> strides;
+   std::vector<uint32_t> offsets;
+@@ -253,7 +327,7 @@ void GbmPixmapWayland::CreateDmabufBasedWlBuffer(
+   // Asks Wayland to create a wl_buffer based on the |file| fd.
+   buffer_manager_->CreateDmabufBasedBuffer(
+       std::move(fd), visible_area_size_, strides, offsets, modifiers,
+-      gbm_bo_->GetFormat(), plane_count, overlay_plane_data.color_space,
++      format, plane_count, overlay_plane_data.color_space,
+       overlay_plane_data.hdr_metadata.value_or(gfx::HDRMetadata()), buffer_id_);
+ }
+ 
+diff --git a/ui/ozone/platform/wayland/gpu/wayland_overlay_manager.cc b/ui/ozone/platform/wayland/gpu/wayland_overlay_manager.cc
+index 3e826ab3b5..105fdbb822 100644
+--- a/ui/ozone/platform/wayland/gpu/wayland_overlay_manager.cc
++++ b/ui/ozone/platform/wayland/gpu/wayland_overlay_manager.cc
+@@ -4,10 +4,14 @@
+ 
+ #include "ui/ozone/platform/wayland/gpu/wayland_overlay_manager.h"
+ 
++#include <cmath>
+ #include <variant>
+ 
++#include "base/feature_list.h"
+ #include "base/logging.h"
+ #include "components/viz/common/resources/shared_image_format_utils.h"
++#include "ui/base/ui_base_features.h"
++#include "ui/gfx/buffer_format_util.h"
+ #include "ui/gfx/geometry/rect_conversions.h"
+ #include "ui/gfx/geometry/rect_f.h"
+ #include "ui/ozone/platform/wayland/common/wayland_util.h"
+@@ -19,6 +23,79 @@ namespace ui {
+ 
+ namespace {
+ 
++constexpr int kOverlayDebugLogLimit = 4;
++constexpr float kOverlayRectEpsilon = 0.01f;
++
++bool IsYuvCandidate(const OverlaySurfaceCandidate& candidate) {
++  return viz::SharedImageFormatToBufferFormat(candidate.format) ==
++         gfx::BufferFormat::YUV_420_BIPLANAR;
++}
++
++void LogYuvCandidateDecision(const OverlaySurfaceCandidate& candidate,
++                             const char* reason,
++                             bool handled) {
++  if (!base::FeatureList::IsEnabled(::features::kV4L2NoScaleOverlay)) {
++    return;
++  }
++  static int log_count = 0;
++  if (!IsYuvCandidate(candidate) || log_count++ >= kOverlayDebugLogLimit) {
++    return;
++  }
++
++  VLOG(1) << "[V4L-GST-OVERLAY] WAYLAND_CANDIDATE"
++             << " handled=" << handled
++             << " reason=" << reason
++             << " format=" << candidate.format.ToString()
++             << " buffer_size=" << candidate.buffer_size.ToString()
++             << " z_order=" << candidate.plane_z_order
++             << " display_rect=" << candidate.display_rect.ToString()
++             << " crop_rect=" << candidate.crop_rect.ToString()
++             << " clip_rect="
++             << (candidate.clip_rect ? candidate.clip_rect->ToString()
++                                     : "none")
++             << " opaque=" << candidate.is_opaque
++             << " opacity=" << candidate.opacity
++             << " priority_hint="
++             << static_cast<int>(candidate.priority_hint)
++             << " requires_overlay=" << candidate.requires_overlay
++             << " has_background=" << candidate.background_color.has_value()
++             << " has_pixmap=" << !!candidate.native_pixmap;
++}
++
++bool DropRedundantClipRectForWayland(OverlaySurfaceCandidate& candidate) {
++  if (!candidate.clip_rect) {
++    return false;
++  }
++
++  // Wayland overlay delegation cannot express clip_rect directly. If the
++  // candidate display rect is already fully inside the clip, the clip is
++  // redundant and can be ignored without exposing extra content.
++  if (!gfx::RectF(*candidate.clip_rect).Contains(candidate.display_rect)) {
++    return false;
++  }
++
++  if (IsYuvCandidate(candidate)) {
++    LogYuvCandidateDecision(candidate, "drop_redundant_clip_rect", true);
++  }
++  candidate.clip_rect.reset();
++  return true;
++}
++
++bool IsFullCrop(const gfx::RectF& crop_rect) {
++  return std::abs(crop_rect.x()) <= kOverlayRectEpsilon &&
++         std::abs(crop_rect.y()) <= kOverlayRectEpsilon &&
++         std::abs(crop_rect.width() - 1.f) <= kOverlayRectEpsilon &&
++         std::abs(crop_rect.height() - 1.f) <= kOverlayRectEpsilon;
++}
++
++bool IsNoScaleYuvCandidate(const OverlaySurfaceCandidate& candidate) {
++  return std::abs(candidate.display_rect.width() -
++                  candidate.buffer_size.width()) <= kOverlayRectEpsilon &&
++         std::abs(candidate.display_rect.height() -
++                  candidate.buffer_size.height()) <= kOverlayRectEpsilon &&
++         IsFullCrop(candidate.crop_rect);
++}
++
+ void NotifyOverlayDelegationLimitedCapabilityOnce() {
+   static bool logged_once = false;
+   if (!logged_once) {
+@@ -49,6 +126,7 @@ void WaylandOverlayManager::CheckOverlaySupport(
+     std::vector<OverlaySurfaceCandidate>* candidates,
+     gfx::AcceleratedWidget widget) {
+   for (auto& candidate : *candidates) {
++    DropRedundantClipRectForWayland(candidate);
+     bool can_handle = CanHandleCandidate(candidate, widget);
+ 
+     // CanHandleCandidate() should never return false if the candidate is
+@@ -64,6 +142,7 @@ bool WaylandOverlayManager::CanHandleCandidate(
+     gfx::AcceleratedWidget widget) const {
+   if (!manager_gpu_->SupportsFormat(
+           viz::SharedImageFormatToBufferFormat(candidate.format))) {
++    LogYuvCandidateDecision(candidate, "unsupported_format", false);
+     return false;
+   }
+ 
+@@ -78,6 +157,7 @@ bool WaylandOverlayManager::CanHandleCandidate(
+       gfx::RectF(-kMaxWaylandFixed, -kMaxWaylandFixed, kMaxWaylandFixed * 2,
+                  kMaxWaylandFixed * 2);
+   if (!kMaxWaylandRect.Contains(candidate.display_rect)) {
++    LogYuvCandidateDecision(candidate, "display_rect_out_of_range", false);
+     return false;
+   }
+   // Passing an empty surface size through wayland will actually clear the size
+@@ -90,21 +170,34 @@ bool WaylandOverlayManager::CanHandleCandidate(
+   if (wl_fixed_from_double(candidate.display_rect.width() /
+                            kAssumedMaxDeviceScaleFactor) == 0 ||
+       wl_fixed_from_double(candidate.display_rect.height() /
+-                           kAssumedMaxDeviceScaleFactor) == 0)
++                           kAssumedMaxDeviceScaleFactor) == 0) {
++    LogYuvCandidateDecision(candidate, "display_rect_too_small", false);
+     return false;
++  }
+ 
+   if (std::holds_alternative<gfx::OverlayTransform>(candidate.transform)) {
+     if (std::get<gfx::OverlayTransform>(candidate.transform) ==
+         gfx::OVERLAY_TRANSFORM_INVALID) {
++      LogYuvCandidateDecision(candidate, "invalid_overlay_transform", false);
+       return false;
+     }
+   } else if (std::get<gfx::Transform>(candidate.transform).HasPerspective()) {
+     // Wayland supports only 2d matrix transforms.
++    LogYuvCandidateDecision(candidate, "perspective_transform", false);
++    return false;
++  }
++
++  // Wayland doesn't support background_color or clip_rect.
++  if (candidate.background_color.has_value() || candidate.clip_rect) {
++    LogYuvCandidateDecision(candidate, "background_or_clip_rect", false);
+     return false;
+   }
+ 
+-  // Wayland doesn't support clip_rect, background_color.
+-  if (candidate.clip_rect || candidate.background_color.has_value()) {
++  // The RZ/G2L DU plane accepts NV12 LINEAR buffers, but our experiments show
++  // that NV12 plane scaling fails atomic tests. Delegate only no-scale NV12
++  // candidates and let scaled/cropped video fall back to GPU composition.
++  if (IsYuvCandidate(candidate) && !IsNoScaleYuvCandidate(candidate)) {
++    LogYuvCandidateDecision(candidate, "nv12_requires_scaling_or_crop", false);
+     return false;
+   }
+ 
+@@ -114,9 +207,12 @@ bool WaylandOverlayManager::CanHandleCandidate(
+   }
+ 
+   // Reject candidates that don't fall on a pixel boundary.
+-  if (!gfx::IsNearestRectWithinDistance(candidate.display_rect, 0.01f))
++  if (!gfx::IsNearestRectWithinDistance(candidate.display_rect, 0.01f)) {
++    LogYuvCandidateDecision(candidate, "subpixel_display_rect", false);
+     return false;
++  }
+ 
++  LogYuvCandidateDecision(candidate, "accepted", true);
+   return true;
+ }
+ 
+-- 
+2.43.0
+

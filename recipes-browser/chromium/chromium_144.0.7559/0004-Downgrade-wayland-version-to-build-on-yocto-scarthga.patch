@@ -1,0 +1,63 @@
+From 9101a4b38c921b9eca9f54bbff6e99b68d2dd248 Mon Sep 17 00:00:00 2001
+From: Takuro Ashie <ashie@clear-code.com>
+Date: Tue, 1 Jul 2025 15:38:25 +0900
+Subject: [PATCH 04/21] Downgrade wayland version to build on yocto scarthgap
+
+It assumes that use with use_system_libwayland=true.
+
+Upstream-Status: Inappropriate [oe specific]
+---
+ third_party/wayland/wayland_version.gni            |  4 ++--
+ ui/ozone/platform/wayland/host/wayland_keyboard.cc | 10 ++++++++--
+ 2 files changed, 10 insertions(+), 4 deletions(-)
+
+diff --git a/third_party/wayland/wayland_version.gni b/third_party/wayland/wayland_version.gni
+index 3789339c36..6f9f32fa66 100644
+--- a/third_party/wayland/wayland_version.gni
++++ b/third_party/wayland/wayland_version.gni
+@@ -4,5 +4,5 @@
+ # is true to check system wayland package version meets
+ # at least the version of third-party/wayland so that it won't
+ # make any compile error with chromium
+-wayland_version = "1.24.0"
+-wayland_egl_version = "18.1.0"
++wayland_version = "1.22.0"
++wayland_egl_version = "1.0.0"
+diff --git a/ui/ozone/platform/wayland/host/wayland_keyboard.cc b/ui/ozone/platform/wayland/host/wayland_keyboard.cc
+index 3726dd2d27..22304479dd 100644
+--- a/ui/ozone/platform/wayland/host/wayland_keyboard.cc
++++ b/ui/ozone/platform/wayland/host/wayland_keyboard.cc
+@@ -43,6 +43,12 @@ namespace ui {
+ 
+ namespace {
+ 
++// WL_KEYBOARD_KEY_STATE_REPEATED was added to the generated Wayland headers
++// after the version supported by some of our build environments.  The value
++// is part of the wire protocol, so recognize it without depending on the
++// newer header symbol.
++constexpr uint32_t kWaylandKeyboardKeyStateRepeated = 2;
++
+ bool IsModifierKey(int key) {
+   auto dom_code = KeycodeConverter::EvdevCodeToDomCode(key);
+   switch (dom_code) {
+@@ -398,7 +404,7 @@ void WaylandKeyboard::ProcessKey(uint32_t serial,
+                                  KeyEventKind kind) {
+   // If we receive a Repeat event while repeat info != 0,
+   // we shouldn't dispatch it.
+-  if (state == WL_KEYBOARD_KEY_STATE_REPEATED &&
++  if (state == kWaylandKeyboardKeyStateRepeated &&
+       auto_repeat_handler_.IsAutoRepeatEnabled()) {
+     LOG(WARNING) << "Received key repeat event while repeat rate is non-zero";
+     return;
+@@ -427,7 +433,7 @@ void WaylandKeyboard::ProcessKey(uint32_t serial,
+   }
+ 
+   DispatchKey(key, 0 /*scan_code*/, down,
+-              state == WL_KEYBOARD_KEY_STATE_REPEATED /*repeat*/,
++              state == kWaylandKeyboardKeyStateRepeated /*repeat*/,
+               std::make_optional(serial),
+               wl::EventMillisecondsToTimeTicks(time), device_id(), EF_NONE,
+               kind);
+-- 
+2.43.0
+

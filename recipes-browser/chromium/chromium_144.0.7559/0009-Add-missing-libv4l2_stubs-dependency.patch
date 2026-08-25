@@ -1,0 +1,30 @@
+From ed8e2219eff8577ed212080a5cdccf17289f4d64 Mon Sep 17 00:00:00 2001
+From: Takuro Ashie <ashie@clear-code.com>
+Date: Fri, 20 Mar 2026 14:42:23 +0900
+Subject: [PATCH 09/21] Add missing libv4l2_stubs dependency
+
+Upstream-Status: Inappropriate [oe specific]
+
+Signed-off-by: Takuro Ashie <ashie@clear-code.com>
+---
+ media/gpu/v4l2/BUILD.gn | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/media/gpu/v4l2/BUILD.gn b/media/gpu/v4l2/BUILD.gn
+index 9f6369aa65..eb09f2ed2a 100644
+--- a/media/gpu/v4l2/BUILD.gn
++++ b/media/gpu/v4l2/BUILD.gn
+@@ -143,6 +143,10 @@ source_set("v4l2") {
+   # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and
+   # enable the diagnostic by removing this line.
+   configs += [ "//build/config/compiler:no_exit_time_destructors" ]
++
++  if (use_v4lplugin) {
++    deps += [ "//media/gpu/v4l2:libv4l2_stubs" ]
++  }
+ }
+ 
+ # The v4l2 status functionality is in its own source set so that it can be
+-- 
+2.43.0
+

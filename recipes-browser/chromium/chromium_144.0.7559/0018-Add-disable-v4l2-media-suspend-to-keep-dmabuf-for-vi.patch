@@ -1,0 +1,83 @@
+From 947f71b7eb5ff1fbf25f04ea68f5fb7f0813f23a Mon Sep 17 00:00:00 2001
+From: Takuro Ashie <ashie@clear-code.com>
+Date: Thu, 30 Apr 2026 18:48:29 +0900
+Subject: [PATCH 18/21] Add --disable-v4l2-media-suspend to keep dmabuf for
+ video preview
+
+Upstream-Status: Inappropriate [oe specific]
+
+Signed-off-by: Takuro Ashie <ashie@clear-code.com>
+---
+ content/browser/renderer_host/render_process_host_impl.cc | 3 +++
+ media/base/media_switches.cc                              | 6 ++++++
+ media/base/media_switches.h                               | 3 +++
+ .../renderer/platform/media/web_media_player_impl.cc      | 8 ++++++++
+ 4 files changed, 20 insertions(+)
+
+diff --git a/content/browser/renderer_host/render_process_host_impl.cc b/content/browser/renderer_host/render_process_host_impl.cc
+index 6ad685197a..c057b1fa3d 100644
+--- a/content/browser/renderer_host/render_process_host_impl.cc
++++ b/content/browser/renderer_host/render_process_host_impl.cc
+@@ -3685,6 +3685,9 @@ void RenderProcessHostImpl::PropagateBrowserCommandLineToRenderer(
+       switches::kDisableHistogramCustomizer,
+       switches::kDisableLCDText,
+       switches::kDisableBackgroundMediaSuspend,
++#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX)
++      switches::kDisableV4L2MediaSuspend,
++#endif
+       switches::kDisableNotifications,
+       switches::kDisableOriginTrialControlledBlinkFeatures,
+       switches::kDisablePresentationAPI,
+diff --git a/media/base/media_switches.cc b/media/base/media_switches.cc
+index eb9292e86b..02af6217b8 100644
+--- a/media/base/media_switches.cc
++++ b/media/base/media_switches.cc
+@@ -185,6 +185,12 @@ const char kOverrideEnabledCdmInterfaceVersion[] =
+ const char kOverrideHardwareSecureCodecsForTesting[] =
+     "override-hardware-secure-codecs-for-testing";
+ 
++#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX)
++// Never suspend v4l2 decoder to preserve decoded preview image.
++const char kDisableV4L2MediaSuspend[] =
++    "disable-v4l2-media-suspend";
++#endif
++
+ // Force to report VP9 as an unsupported MIME type.
+ const char kReportVp9AsAnUnsupportedMimeType[] =
+     "report-vp9-as-an-unsupported-mime-type";
+diff --git a/media/base/media_switches.h b/media/base/media_switches.h
+index b63fcad490..660104261d 100644
+--- a/media/base/media_switches.h
++++ b/media/base/media_switches.h
+@@ -49,6 +49,9 @@ MEDIA_EXPORT extern const char kDisableAcceleratedMjpegDecode[];
+ MEDIA_EXPORT extern const char kDisableAudioInput[];
+ MEDIA_EXPORT extern const char kDisableAudioOutput[];
+ MEDIA_EXPORT extern const char kDisableBackgroundMediaSuspend[];
++#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX)
++MEDIA_EXPORT extern const char kDisableV4L2MediaSuspend[];
++#endif
+ MEDIA_EXPORT extern const char kDisableRTCSmoothnessAlgorithm[];
+ MEDIA_EXPORT extern const char kEnableLiveCaptionPrefForTesting[];
+ MEDIA_EXPORT extern const char kFailAudioStreamCreation[];
+diff --git a/third_party/blink/renderer/platform/media/web_media_player_impl.cc b/third_party/blink/renderer/platform/media/web_media_player_impl.cc
+index 8adf7e71e3..7ada5d291e 100644
+--- a/third_party/blink/renderer/platform/media/web_media_player_impl.cc
++++ b/third_party/blink/renderer/platform/media/web_media_player_impl.cc
+@@ -3158,6 +3158,14 @@ void WebMediaPlayerImpl::SetSuspendState(bool is_suspended) {
+   DCHECK(main_task_runner_->BelongsToCurrentThread());
+   DVLOG(2) << __func__ << "(" << is_suspended << ")";
+ 
++#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX)
++  if (video_decoder_type_ == media::VideoDecoderType::kV4L2 &&
++      base::CommandLine::ForCurrentProcess()->HasSwitch(
++          switches::kDisableV4L2MediaSuspend)) {
++    is_suspended = false;
++  }
++#endif
++
+   // Do not change the state after an error has occurred.
+   // TODO(sandersd): Update PipelineController to remove the need for this.
+   if (IsNetworkStateError(network_state_))
+-- 
+2.43.0
+

@@ -1,0 +1,44 @@
+From b8a45913340d5b7994361b3f49ed8250158311d0 Mon Sep 17 00:00:00 2001
+From: Takuro Ashie <ashie@clear-code.com>
+Date: Wed, 18 Mar 2026 17:12:45 +0900
+Subject: [PATCH 01/21] Use DRI only on X11 and disable it on Wayland
+
+Previously, DRI was required regardless of the window system,
+causing an unintended dependency on DRI even under Wayland.
+
+Upstream-Status: Pending
+Signed-off-by: Takuro Ashie <ashie@clear-code.com>
+---
+ content/gpu/BUILD.gn       | 2 +-
+ media/gpu/sandbox/BUILD.gn | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/content/gpu/BUILD.gn b/content/gpu/BUILD.gn
+index 9ad6d34c60..bf944f415f 100644
+--- a/content/gpu/BUILD.gn
++++ b/content/gpu/BUILD.gn
+@@ -126,7 +126,7 @@ target(link_target_type, "gpu_sources") {
+ 
+   # Use DRI on desktop Linux builds.
+   if (current_cpu != "s390x" && current_cpu != "ppc64" && is_linux &&
+-      !is_castos) {
++      !is_castos && ozone_platform_x11) {
+     configs += [ "//build/config/linux/dri" ]
+   }
+ }
+diff --git a/media/gpu/sandbox/BUILD.gn b/media/gpu/sandbox/BUILD.gn
+index 7987b932c6..96ab555bfb 100644
+--- a/media/gpu/sandbox/BUILD.gn
++++ b/media/gpu/sandbox/BUILD.gn
+@@ -26,7 +26,7 @@ source_set("sandbox") {
+     deps += [ "//media/gpu/v4l2" ]
+   }
+   if (current_cpu != "s390x" && current_cpu != "ppc64" && is_linux &&
+-      !is_castos) {
++      !is_castos && ozone_platform_x11) {
+     # For DRI_DRIVER_DIR.
+     configs += [ "//build/config/linux/dri" ]
+   }
+-- 
+2.43.0
+

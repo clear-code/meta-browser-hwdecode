@@ -1,0 +1,448 @@
+From 98c095c6dd65a2226bb7daa4893f386ec9770e15 Mon Sep 17 00:00:00 2001
+From: Kentaro Hayashi <hayashi@clear-code.com>
+Date: Mon, 14 Jul 2025 11:51:10 +0900
+Subject: [PATCH 15/21] Use V4L2 ioctl wrapper when it is available
+
+It fixes the following error:
+
+  [1040:1127:0711/125412.171663:ERROR:v4l2_stateful_video_decoder.cc(1196)]
+  Failed querying caps: Inappropriate ioctl for device (25)
+
+Upstream-Status: Pending
+Signed-off-by: Kentaro Hayashi <hayashi@clear-code.com>
+Signed-off-by: Takuro Ashie <ashie@clear-code.com>
+---
+ media/base/media_switches.cc                  |   5 +
+ media/base/media_switches.h                   |   1 +
+ media/gpu/chromeos/video_decoder_pipeline.cc  |   2 +-
+ media/gpu/v4l2/v4l2_device.cc                 |   3 +-
+ media/gpu/v4l2/v4l2_queue.cc                  |   2 +-
+ media/gpu/v4l2/v4l2_stateful_video_decoder.cc |  39 +++---
+ media/gpu/v4l2/v4l2_utils.cc                  | 127 ++++++++++--------
+ media/gpu/v4l2/v4l2_utils.h                   |  19 +++
+ 8 files changed, 117 insertions(+), 81 deletions(-)
+
+diff --git a/media/base/media_switches.cc b/media/base/media_switches.cc
+index b5962932b8..eb9292e86b 100644
+--- a/media/base/media_switches.cc
++++ b/media/base/media_switches.cc
+@@ -745,6 +745,11 @@ BASE_FEATURE(kVSyncMjpegDecoding, base::FEATURE_DISABLED_BY_DEFAULT);
+ // Enable H264 temporal layer encoding with V4L2 HW encoder on ChromeOS.
+ BASE_FEATURE(kV4L2H264TemporalLayerHWEncoding,
+              base::FEATURE_DISABLED_BY_DEFAULT);
++
++// Enable legacy V4L2StatefulVideoDecoderBackend instead of new V4L2StatefulVideoDecoder
++BASE_FEATURE(kV4L2StatefulVideoDecoderLegacy,
++             "V4L2StatefulVideoDecoderLegacy",
++             base::FEATURE_ENABLED_BY_DEFAULT);
+ #endif
+ 
+ // Inform video blitter of video color space.
+diff --git a/media/base/media_switches.h b/media/base/media_switches.h
+index 1c4a8bbde0..b63fcad490 100644
+--- a/media/base/media_switches.h
++++ b/media/base/media_switches.h
+@@ -330,6 +330,7 @@ MEDIA_EXPORT BASE_DECLARE_FEATURE(kVSyncMjpegDecoding);
+ #endif  // defined(ARCH_CPU_X86_FAMILY) && BUILDFLAG(IS_CHROMEOS)
+ #if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX)
+ MEDIA_EXPORT BASE_DECLARE_FEATURE(kV4L2H264TemporalLayerHWEncoding);
++MEDIA_EXPORT BASE_DECLARE_FEATURE(kV4L2StatefulVideoDecoderLegacy);
+ #endif  // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX)
+ MEDIA_EXPORT BASE_DECLARE_FEATURE(kVideoBlitColorAccuracy);
+ MEDIA_EXPORT BASE_DECLARE_FEATURE(kCastVideoEncoderFrameDrop);
+diff --git a/media/gpu/chromeos/video_decoder_pipeline.cc b/media/gpu/chromeos/video_decoder_pipeline.cc
+index 2e4c64659f..d4492bb05b 100644
+--- a/media/gpu/chromeos/video_decoder_pipeline.cc
++++ b/media/gpu/chromeos/video_decoder_pipeline.cc
+@@ -233,7 +233,7 @@ std::unique_ptr<VideoDecoder> VideoDecoderPipeline::Create(
+ #if BUILDFLAG(USE_VAAPI)
+     create_decoder_function_cb = base::BindOnce(&VaapiVideoDecoder::Create);
+ #elif BUILDFLAG(USE_V4L2_CODEC)
+-    if (IsV4L2DecoderStateful()) {
++    if (!base::FeatureList::IsEnabled(kV4L2StatefulVideoDecoderLegacy) && IsV4L2DecoderStateful()) {
+       create_decoder_function_cb =
+           base::BindOnce(&V4L2StatefulVideoDecoder::Create);
+     } else {
+diff --git a/media/gpu/v4l2/v4l2_device.cc b/media/gpu/v4l2/v4l2_device.cc
+index 219a661e61..c382905d2e 100644
+--- a/media/gpu/v4l2/v4l2_device.cc
++++ b/media/gpu/v4l2/v4l2_device.cc
+@@ -170,8 +170,7 @@ base::ScopedFD V4L2Device::OpenFDForType(Type type) {
+     std::string path = devices.front().first;
+     DCHECK(!path.empty());
+ 
+-    devfd.reset(
+-        HANDLE_EINTR(open(path.c_str(), O_RDWR | O_NONBLOCK | O_CLOEXEC)));
++    devfd.reset(OpenV4L2Device(path.c_str()));
+     VLOGF(3) << "Using device " << path
+              << " for type: " << static_cast<int>(type);
+   } else {
+diff --git a/media/gpu/v4l2/v4l2_queue.cc b/media/gpu/v4l2/v4l2_queue.cc
+index f9f1ca1d52..a52de2424c 100644
+--- a/media/gpu/v4l2/v4l2_queue.cc
++++ b/media/gpu/v4l2/v4l2_queue.cc
+@@ -260,7 +260,7 @@ V4L2Buffer::~V4L2Buffer() {
+   if (v4l2_buffer_.memory == V4L2_MEMORY_MMAP) {
+     for (size_t i = 0; i < plane_mappings_.size(); i++) {
+       if (plane_mappings_[i] != nullptr) {
+-        munmap(plane_mappings_[i], v4l2_buffer_.m.planes[i].length);
++        media::V4L2Munmap(plane_mappings_[i], v4l2_buffer_.m.planes[i].length);
+       }
+     }
+   }
+diff --git a/media/gpu/v4l2/v4l2_stateful_video_decoder.cc b/media/gpu/v4l2/v4l2_stateful_video_decoder.cc
+index 7b9798f0af..63245079e6 100644
+--- a/media/gpu/v4l2/v4l2_stateful_video_decoder.cc
++++ b/media/gpu/v4l2/v4l2_stateful_video_decoder.cc
+@@ -42,19 +42,6 @@ namespace {
+ // Numerical value of ioctl() OK return value;
+ constexpr int kIoctlOk = 0;
+ 
+-int HandledIoctl(int fd, int request, void* arg) {
+-  return HANDLE_EINTR(ioctl(fd, request, arg));
+-}
+-
+-void* Mmap(int fd,
+-           void* addr,
+-           unsigned int len,
+-           int prot,
+-           int flags,
+-           unsigned int offset) {
+-  return mmap(addr, len, prot, flags, fd, offset);
+-}
+-
+ // This method blocks waiting for an event from either |device_fd| or
+ // |wake_event|; then if it's of the type POLLIN (meaning there's data) or
+ // POLLPRI (meaning a resolution change event) and from |device_fd|, this
+@@ -99,7 +86,7 @@ void WaitOnceForEvents(int device_fd,
+       // Dequeue the event otherwise it'll be stuck in the driver forever.
+       struct v4l2_event event;
+       memset(&event, 0, sizeof(event));  // Must do: v4l2_event has a union.
+-      if (HandledIoctl(device_fd, VIDIOC_DQEVENT, &event) != kIoctlOk) {
++      if (media::HandledIoctl(device_fd, VIDIOC_DQEVENT, &event) != kIoctlOk) {
+         PLOG(ERROR) << "Failed dequeing an event";
+         return;
+       }
+@@ -328,7 +315,7 @@ void V4L2StatefulVideoDecoder::Initialize(const VideoDecoderConfig& config,
+     }
+ 
+     struct v4l2_capability caps = {};
+-    if (HandledIoctl(device_fd_.get(), VIDIOC_QUERYCAP, &caps) != kIoctlOk) {
++    if (media::HandledIoctl(device_fd_.get(), VIDIOC_QUERYCAP, &caps) != kIoctlOk) {
+       PLOG(ERROR) << "Failed querying caps";
+       std::move(init_cb).Run(DecoderStatus::Codes::kFailedToCreateDecoder);
+       return;
+@@ -370,7 +357,7 @@ void V4L2StatefulVideoDecoder::Initialize(const VideoDecoderConfig& config,
+   }
+ 
+   framerate_control_ = std::make_unique<V4L2FrameRateControl>(
+-      base::BindRepeating(&HandledIoctl, device_fd_.get()),
++      base::BindRepeating(&media::HandledIoctl, device_fd_.get()),
+       base::SequencedTaskRunner::GetCurrentDefault());
+ 
+   // At this point we initialize the |OUTPUT_queue_| only, following
+@@ -381,9 +368,9 @@ void V4L2StatefulVideoDecoder::Initialize(const VideoDecoderConfig& config,
+   // [1] https://www.kernel.org/doc/html/v5.15/userspace-api/media/v4l/dev-decoder.html#initialization
+   OUTPUT_queue_ = base::MakeRefCounted<V4L2Queue>(
+       V4L2Queue::PassKey::Get(),
+-      base::BindRepeating(&HandledIoctl, device_fd_.get()),
++      base::BindRepeating(&media::HandledIoctl, device_fd_.get()),
+       /*schedule_poll_cb=*/base::DoNothing(),
+-      /*mmap_cb=*/base::BindRepeating(&Mmap, device_fd_.get()),
++      /*mmap_cb=*/base::BindRepeating(&media::V4L2Mmap, device_fd_.get()),
+       AllocateSecureBufferAsCallback(), V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE,
+       /*destroy_cb=*/base::DoNothing());
+ 
+@@ -426,7 +413,7 @@ void V4L2StatefulVideoDecoder::Initialize(const VideoDecoderConfig& config,
+   // Subscribe to the resolution change event. This is needed for resolution
+   // changes mid stream but also to initialize the |CAPTURE_queue|.
+   struct v4l2_event_subscription sub = {.type = V4L2_EVENT_SOURCE_CHANGE};
+-  if (HandledIoctl(device_fd_.get(), VIDIOC_SUBSCRIBE_EVENT, &sub) !=
++  if (media::HandledIoctl(device_fd_.get(), VIDIOC_SUBSCRIBE_EVENT, &sub) !=
+       kIoctlOk) {
+     PLOG(ERROR) << "Failed to subscribe to V4L2_EVENT_SOURCE_CHANGE";
+     std::move(init_cb).Run(DecoderStatus::Codes::kFailedToCreateDecoder);
+@@ -684,6 +671,8 @@ V4L2StatefulVideoDecoder::~V4L2StatefulVideoDecoder() {
+         FROM_HERE,
+         base::BindOnce([](base::ScopedFD fd) {}, std::move(wake_event_)));
+   }
++
++  CloseV4L2Device(device_fd_.release());
+ }
+ 
+ bool V4L2StatefulVideoDecoder::InitializeCAPTUREQueue() {
+@@ -692,9 +681,9 @@ bool V4L2StatefulVideoDecoder::InitializeCAPTUREQueue() {
+ 
+   CAPTURE_queue_ = base::MakeRefCounted<V4L2Queue>(
+       V4L2Queue::PassKey::Get(),
+-      base::BindRepeating(&HandledIoctl, device_fd_.get()),
++      base::BindRepeating(&media::HandledIoctl, device_fd_.get()),
+       /*schedule_poll_cb=*/base::DoNothing(),
+-      /*mmap_cb=*/base::BindRepeating(&Mmap, device_fd_.get()),
++      /*mmap_cb=*/base::BindRepeating(&media::V4L2Mmap, device_fd_.get()),
+       AllocateSecureBufferAsCallback(), V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE,
+       /*destroy_cb=*/base::DoNothing());
+ 
+@@ -807,7 +796,7 @@ V4L2StatefulVideoDecoder::EnumeratePixelLayoutCandidates(
+   DCHECK(CAPTURE_queue_) << "|CAPTURE_queue_| must be created at this point";
+ 
+   const auto v4l2_pix_fmts = EnumerateSupportedPixFmts(
+-      base::BindRepeating(&HandledIoctl, device_fd_.get()),
++      base::BindRepeating(&media::HandledIoctl, device_fd_.get()),
+       V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE);
+ 
+   std::vector<ImageProcessor::PixelLayoutCandidate> candidates;
+@@ -847,7 +836,7 @@ size_t V4L2StatefulVideoDecoder::GetNumberOfReferenceFrames() {
+ 
+   struct v4l2_ext_control ctrl = {.id = V4L2_CID_MIN_BUFFERS_FOR_CAPTURE};
+   struct v4l2_ext_controls ext_ctrls = {.count = 1, .controls = &ctrl};
+-  if (HandledIoctl(device_fd_.get(), VIDIOC_G_EXT_CTRLS, &ext_ctrls) ==
++  if (media::HandledIoctl(device_fd_.get(), VIDIOC_G_EXT_CTRLS, &ext_ctrls) ==
+       kIoctlOk) {
+     num_codec_reference_frames = std::max(
+         base::checked_cast<size_t>(ctrl.value), num_codec_reference_frames);
+@@ -1205,7 +1194,9 @@ int V4L2StatefulVideoDecoder::GetMaxNumDecoderInstances() {
+     return std::numeric_limits<int>::max();
+   }
+   struct v4l2_capability caps = {};
+-  if (HandledIoctl(device_fd.get(), VIDIOC_QUERYCAP, &caps) != kIoctlOk) {
++  auto ret = media::HandledIoctl(device_fd.get(), VIDIOC_QUERYCAP, &caps);
++  CloseV4L2Device(device_fd.release());
++  if (ret != kIoctlOk) {
+     PLOG(ERROR) << "Failed querying caps";
+     return std::numeric_limits<int>::max();
+   }
+diff --git a/media/gpu/v4l2/v4l2_utils.cc b/media/gpu/v4l2/v4l2_utils.cc
+index fec3b1912e..5f4fd22567 100644
+--- a/media/gpu/v4l2/v4l2_utils.cc
++++ b/media/gpu/v4l2/v4l2_utils.cc
+@@ -76,16 +76,11 @@ using media_gpu_v4l2::kModuleV4l2;
+ using media_gpu_v4l2::StubPathMap;
+ 
+ inline static constexpr char kLibV4l2Path[] = "libv4l2.so.0";
++inline static constexpr char kVideoDeviceDriverPath[] = "/dev/video-dec0";
+ 
+ static bool use_libv4l2_ = false;
+ 
+ namespace {
+-int HandledIoctl(int fd, int request, void* arg) {
+-  if (use_libv4l2_)
+-    return HANDLE_EINTR(v4l2_ioctl(fd, request, arg));
+-  return HANDLE_EINTR(ioctl(fd, request, arg));
+-}
+-
+ std::string GetDriverName(const media::IoctlAsCallback& ioctl_cb) {
+   struct v4l2_capability caps;
+   memset(&caps, 0, sizeof(caps));
+@@ -100,6 +95,67 @@ std::string GetDriverName(const media::IoctlAsCallback& ioctl_cb) {
+ }  // namespace
+ namespace media {
+ 
++bool IsV4L2LibInitialized() {
++  StubPathMap paths;
++  paths[kModuleV4l2].push_back(kLibV4l2Path);
++
++  static bool libv4l2_initialized = InitializeStubs(paths);
++  if (!libv4l2_initialized)
++    VLOGF(1) << "Failed to initialize LIBV4L2 libs";
++
++  return libv4l2_initialized;
++}
++
++int OpenV4L2Device(const std::string& path)
++{
++  int fd = HANDLE_EINTR(open(path.c_str(), O_RDWR | O_NONBLOCK | O_CLOEXEC));
++  if (fd < 0) {
++    PLOG(WARNING) << "Could not open " << path;
++    return fd;
++  }
++  if (IsV4L2LibInitialized()) {
++    if (HANDLE_EINTR(v4l2_fd_open(fd, V4L2_DISABLE_CONVERSION)) != -1) {
++      DVLOGF(3) << "Using libv4l2 for " << path;
++      use_libv4l2_ = true;
++    }
++  }
++  return fd;
++}
++
++void CloseV4L2Device(int fd)
++{
++  if (use_libv4l2_)
++    v4l2_close(fd);
++  else
++    close(fd);
++}
++
++void* V4L2Mmap(int fd,
++               void* addr,
++               unsigned int len,
++               int prot,
++               int flags,
++               unsigned int offset)
++{
++  if (use_libv4l2_)
++    return v4l2_mmap(addr, len, prot, flags, fd, offset);
++  return mmap(addr, len, prot, flags, fd, offset);
++}
++
++int V4L2Munmap(void* addr,
++               unsigned int len)
++{
++  if (use_libv4l2_)
++    return v4l2_munmap(addr, len);
++  return munmap(addr, len);
++}
++
++int HandledIoctl(int fd, int request, void* arg) {
++  if (use_libv4l2_)
++    return HANDLE_EINTR(v4l2_ioctl(fd, request, arg));
++  return HANDLE_EINTR(ioctl(fd, request, arg));
++}
++
+ const char* V4L2MemoryToString(const v4l2_memory memory) {
+   switch (memory) {
+     case V4L2_MEMORY_MMAP:
+@@ -621,60 +677,30 @@ struct timeval TimeDeltaToTimeVal(base::TimeDelta time_delta) {
+ std::optional<SupportedVideoDecoderConfigs> GetSupportedV4L2DecoderConfigs() {
+   SupportedVideoDecoderConfigs supported_media_configs;
+   std::vector<std::string> candidate_paths;
+-
+-// HACK: We are using chromeos style devices.
+-#if 1 //BUILDFLAG(IS_CHROMEOS)
+-  constexpr char kVideoDevicePattern[] = "/dev/video-dec0";
+-  candidate_paths.push_back(kVideoDevicePattern);
+-#else
+-  constexpr char kVideoDevicePattern[] = "/dev/video";
+-  constexpr int kMaxDevices = 256;
+-  candidate_paths.reserve(kMaxDevices);
+-  for (int i = 0; i < kMaxDevices; ++i) {
+-    candidate_paths.push_back(
+-        base::StringPrintf("%s%d", kVideoDevicePattern, i));
+-  }
+-#endif
+-
+-  StubPathMap paths;
+-  paths[kModuleV4l2].push_back(kLibV4l2Path);
+-
+-  static bool libv4l2_initialized = InitializeStubs(paths);
+-  if (!libv4l2_initialized)
+-    VLOGF(1) << "Failed to initialize LIBV4L2 libs";
++  candidate_paths.push_back(kVideoDeviceDriverPath);
+ 
+   for (const auto& path : candidate_paths) {
+-    base::ScopedFD device_fd(
+-        HANDLE_EINTR(open(path.c_str(), O_RDWR | O_NONBLOCK | O_CLOEXEC)));
+-    if (!device_fd.is_valid()) {
++    int fd = OpenV4L2Device(path);
++    if (fd < 0) {
+ #if BUILDFLAG(IS_CHROMEOS)
+       PLOG(WARNING) << "Could not open " << path;
+ #endif
+       continue;
+     }
+ 
+-    use_libv4l2_ = false;
+-    if (libv4l2_initialized) {
+-      if (HANDLE_EINTR(v4l2_fd_open(device_fd.get(), V4L2_DISABLE_CONVERSION)) !=
+-          -1) {
+-        DVLOGF(3) << "Using libv4l2 for " << path;
+-        use_libv4l2_ = true;
+-      }
+-    }
+-
+     std::vector<uint32_t> v4l2_codecs = EnumerateSupportedPixFmts(
+-        base::BindRepeating(&HandledIoctl, device_fd.get()),
++        base::BindRepeating(&HandledIoctl, fd),
+         V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE);
+ 
+     for (const uint32_t v4l2_codec : v4l2_codecs) {
+       const std::vector<VideoCodecProfile> media_codec_profiles =
+           EnumerateSupportedProfilesForV4L2Codec(
+-              base::BindRepeating(&HandledIoctl, device_fd.get()), v4l2_codec);
++              base::BindRepeating(&HandledIoctl, fd), v4l2_codec);
+ 
+       gfx::Size min_coded_size;
+       gfx::Size max_coded_size;
+       GetSupportedResolution(
+-          base::BindRepeating(&HandledIoctl, device_fd.get()), v4l2_codec,
++          base::BindRepeating(&HandledIoctl, fd), v4l2_codec,
+           &min_coded_size, &max_coded_size);
+ 
+       for (const auto& profile : media_codec_profiles) {
+@@ -689,9 +715,7 @@ std::optional<SupportedVideoDecoderConfigs> GetSupportedV4L2DecoderConfigs() {
+       }
+     }
+ 
+-    if (use_libv4l2_ && device_fd.is_valid())
+-      v4l2_close(device_fd.release());
+-    device_fd.reset();
++    CloseV4L2Device(fd);
+   }
+ 
+ #if DCHECK_IS_ON()
+@@ -706,16 +730,17 @@ std::optional<SupportedVideoDecoderConfigs> GetSupportedV4L2DecoderConfigs() {
+ }
+ 
+ bool IsV4L2DecoderStateful() {
+-#if 0
+-  auto device_fd = V4L2Device::OpenFDForType(V4L2Device::Type::kDecoder);
+-  if (!device_fd.is_valid()) {
++  int fd = OpenV4L2Device(kVideoDeviceDriverPath);
++  if (fd < 0) {
+     return false;
+   }
+ 
+   std::vector<uint32_t> v4l2_codecs = EnumerateSupportedPixFmts(
+-      base::BindRepeating(&HandledIoctl, device_fd.get()),
++      base::BindRepeating(&HandledIoctl, fd),
+       V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE);
+ 
++  CloseV4L2Device(fd);
++
+   // V4L2 stateful formats (don't end up with _SLICE or _FRAME) supported.
+   constexpr std::array<uint32_t, 4> kSupportedStatefulInputCodecs = {
+       V4L2_PIX_FMT_H264,
+@@ -727,10 +752,6 @@ bool IsV4L2DecoderStateful() {
+                             kSupportedStatefulInputCodecs.begin(),
+                             kSupportedStatefulInputCodecs.end()) !=
+          v4l2_codecs.end();
+-#else
+-  /* HACK: Force disabling stateful decoder. */
+-  return false;
+-#endif
+ }
+ 
+ bool IsVislDriver() {
+diff --git a/media/gpu/v4l2/v4l2_utils.h b/media/gpu/v4l2/v4l2_utils.h
+index 69cafe1b53..e75a77d25e 100644
+--- a/media/gpu/v4l2/v4l2_utils.h
++++ b/media/gpu/v4l2/v4l2_utils.h
+@@ -77,6 +77,25 @@ using AllocateSecureBufferAsCallback =
+ // Numerical value of ioctl() OK return value;
+ constexpr int kIoctlOk = 0;
+ 
++// Call open & v4l2_fd_open when it is available
++int OpenV4L2Device(const std::string& path);
++
++// Call close & v4l2_fd_close when it is needed
++void CloseV4L2Device(int fd);
++
++// Call mmap wrapper (v4l2_mmap) when it is needed
++void* V4L2Mmap(int fd,
++               void* addr,
++               unsigned int len,
++               int prot,
++               int flags,
++               unsigned int offset);
++int V4L2Munmap(void* addr,
++               unsigned int len);
++
++// Call ioctl wrapper (v4l2_ioctl) when it is available
++int HandledIoctl(int fd, int request, void* arg);
++
+ // Returns a human readable description of |memory|.
+ const char* V4L2MemoryToString(v4l2_memory memory);
+ 
+-- 
+2.43.0
+
