@@ -1,7 +1,7 @@
 From ed8e2219eff8577ed212080a5cdccf17289f4d64 Mon Sep 17 00:00:00 2001
 From: Takuro Ashie <ashie@clear-code.com>
 Date: Fri, 20 Mar 2026 14:42:23 +0900
-Subject: [PATCH 09/21] Add missing libv4l2_stubs dependency
+Subject: [PATCH 09/22] Add missing libv4l2_stubs dependency
 
 Upstream-Status: Inappropriate [oe specific]
 

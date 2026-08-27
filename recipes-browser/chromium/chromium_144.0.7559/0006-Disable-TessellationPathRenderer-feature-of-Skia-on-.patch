@@ -1,7 +1,7 @@
 From f9c72297a195ac4c862102bb3e060effcb2402d2 Mon Sep 17 00:00:00 2001
 From: Takuro Ashie <ashie@clear-code.com>
 Date: Fri, 24 Oct 2025 13:57:00 +0900
-Subject: [PATCH 06/21] Disable TessellationPathRenderer feature of Skia on
+Subject: [PATCH 06/22] Disable TessellationPathRenderer feature of Skia on
  Mali-G series
 
 We get garbase at https://browserbench.org/MotionMark/.

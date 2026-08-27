@@ -1,0 +1,82 @@
+From 2ebf240c775fae3c1ddb6ac0d3d9cfec6f34c6e1 Mon Sep 17 00:00:00 2001
+From: Takuro Ashie <ashie@clear-code.com>
+Date: Thu, 27 Aug 2026 11:53:42 +0900
+Subject: [PATCH 22/22] ozone/wayland: add switch to disable ANGLE GBM platform
+
+Some embedded EGL implementations cannot initialize ANGLE when GBM is
+passed as the native platform type. Add a runtime switch so the GBM
+attribute can be disabled without rebuilding.
+
+Upstream-Status: Inappropriate [embedded platform-specific workaround]
+---
+ ui/gl/gl_switches.cc                                   |  4 ++++
+ ui/gl/gl_switches.h                                    |  1 +
+ .../platform/wayland/gpu/wayland_gl_egl_utility.cc     | 10 ++++++++--
+ 3 files changed, 13 insertions(+), 2 deletions(-)
+
+diff --git a/ui/gl/gl_switches.cc b/ui/gl/gl_switches.cc
+index 72424d7b1d..10ed7779ad 100644
+--- a/ui/gl/gl_switches.cc
++++ b/ui/gl/gl_switches.cc
+@@ -159,6 +159,9 @@ const char kEnableUnsafeSwiftShader[] = "enable-unsafe-swiftshader";
+ // to swiftshader.
+ const char kDisableD3D11Warp[] = "disable-d3d11-warp";
+ 
++// Disable passing GBM as the native platform type to ANGLE on Wayland.
++const char kDisableWaylandAngleGbm[] = "disable-wayland-angle-gbm";
++
+ // Used for overriding the swap chain format for direct composition SDR video
+ // overlays.
+ const char kDirectCompositionVideoSwapChainFormat[] =
+@@ -195,6 +198,7 @@ const auto kGLSwitchesCopiedFromGpuProcessHostArray = std::to_array({
+     kTintDcLayer,
+     kEnableUnsafeSwiftShader,
+     kDisableD3D11Warp,
++    kDisableWaylandAngleGbm,
+ });
+ // An external span to the array above, so that it can be exposed from the
+ // header file without specifying the size of the array manually.
+diff --git a/ui/gl/gl_switches.h b/ui/gl/gl_switches.h
+index 65924a5bb3..32d6f259ac 100644
+--- a/ui/gl/gl_switches.h
++++ b/ui/gl/gl_switches.h
+@@ -79,6 +79,7 @@ GL_EXPORT extern const char kEnableDirectCompositionVideoOverlays[];
+ GL_EXPORT extern const char kUseAdapterLuid[];
+ GL_EXPORT extern const char kEnableUnsafeSwiftShader[];
+ GL_EXPORT extern const char kDisableD3D11Warp[];
++GL_EXPORT extern const char kDisableWaylandAngleGbm[];
+ 
+ GL_EXPORT extern const char kDirectCompositionVideoSwapChainFormat[];
+ GL_EXPORT extern const char kTintDcLayer[];
+diff --git a/ui/ozone/platform/wayland/gpu/wayland_gl_egl_utility.cc b/ui/ozone/platform/wayland/gpu/wayland_gl_egl_utility.cc
+index a85c4bc0cb..edd3d25f80 100644
+--- a/ui/ozone/platform/wayland/gpu/wayland_gl_egl_utility.cc
++++ b/ui/ozone/platform/wayland/gpu/wayland_gl_egl_utility.cc
+@@ -4,7 +4,9 @@
+ 
+ #include "ui/ozone/platform/wayland/gpu/wayland_gl_egl_utility.h"
+ 
++#include "base/command_line.h"
+ #include "base/containers/contains.h"
++#include "ui/gl/gl_switches.h"
+ 
+ // From ANGLE's egl/eglext.h. Follows the same approach as in
+ // ui/gl/gl_surface_egl.cc
+@@ -59,8 +61,12 @@ void WaylandGLEGLUtility::GetAdditionalEGLAttributes(
+   }
+ 
+ #if defined(WAYLAND_GBM)
+-  display_attributes->push_back(EGL_PLATFORM_ANGLE_NATIVE_PLATFORM_TYPE_ANGLE);
+-  display_attributes->push_back(EGL_PLATFORM_GBM_KHR);
++  if (!base::CommandLine::ForCurrentProcess()->HasSwitch(
++          switches::kDisableWaylandAngleGbm)) {
++    display_attributes->push_back(
++        EGL_PLATFORM_ANGLE_NATIVE_PLATFORM_TYPE_ANGLE);
++    display_attributes->push_back(EGL_PLATFORM_GBM_KHR);
++  }
+ #endif  // defined(WAYLAND_GBM)
+ 
+   if (std::find(display_attributes->begin(), display_attributes->end(),
+-- 
+2.43.0
+

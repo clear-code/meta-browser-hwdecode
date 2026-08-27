@@ -1,7 +1,7 @@
 From 184cfb4517e81552ce0b3ceff8be982905e8841e Mon Sep 17 00:00:00 2001
 From: Takuro Ashie <ashie@clear-code.com>
 Date: Fri, 14 Aug 2026 13:19:10 +0900
-Subject: [PATCH 21/21] ozone/wayland: add Panfrost NV12 no-scale overlay fixes
+Subject: [PATCH 21/22] ozone/wayland: add Panfrost NV12 no-scale overlay fixes
 
 Keep the existing V4L2NoScaleOverlay path split from Panfrost-specific
 stability fixes. Limit forced Viz promotion to no-scale/no-crop NV12,
